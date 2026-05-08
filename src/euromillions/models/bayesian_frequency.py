@@ -36,9 +36,8 @@ class BayesianFrequencyModel:
     ) -> list[tuple[tuple[int, int, int, int, int], tuple[int, int], float]]:
         mp = self._posterior_main_prob(history)
         sp = self._posterior_star_prob(history)
-        top_numbers = sorted(mp, key=lambda n: mp[n], reverse=True)[
-            : max(5, min(50, self.top_number_count))
-        ]
+        top_number_count = max(5, min(50, self.top_number_count))
+        top_numbers = sorted(mp, key=lambda n: mp[n], reverse=True)[:top_number_count]
         mains = sorted(
             ((c, sum(mp[n] for n in c) / 5.0) for c in combinations(sorted(top_numbers), 5)),
             key=lambda x: x[1],
