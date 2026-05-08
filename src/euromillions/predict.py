@@ -138,6 +138,14 @@ def generate_predictions(
             if len(out) == top:
                 break
     if len(out) < top:
+        out = repair_main_diversity(
+            ranked,
+            out,
+            effective_max_main_overlap,
+            effective_require_distinct_star_pairs,
+            target_count=top,
+        )
+    if len(out) < top:
         return out
     if effective_require_distinct_star_pairs and len({row["stars"] for row in out}) < min(top, 66):
         repair_star_pairs(out)
@@ -193,10 +201,11 @@ def repair_main_diversity(
     current: list[PredictionRow],
     max_main_overlap: int,
     require_distinct_star_pairs: bool,
+    target_count: int | None = None,
 ) -> list[PredictionRow]:
     repaired: list[PredictionRow] = []
     used_tickets: set[tuple[tuple[int, int, int, int, int], tuple[int, int]]] = set()
-    target_count = len(current)
+    target = len(current) if target_count is None else target_count
     for original in current:
         if _is_diverse_enough(repaired, original["mains"], original["stars"], max_main_overlap, require_distinct_star_pairs):
             repaired.append(original)
@@ -218,9 +227,9 @@ def repair_main_diversity(
             )
             used_tickets.add((mains, stars))
             break
-    if len(repaired) < target_count:
+    if len(repaired) < target:
         for mains, stars, score in fallback_diverse_candidates():
-            if len(repaired) == target_count:
+            if len(repaired) == target:
                 break
             if (mains, stars) in used_tickets:
                 continue
@@ -245,8 +254,6 @@ def fallback_diverse_candidates() -> list[tuple[tuple[int, int, int, int, int], 
     candidates: list[tuple[tuple[int, int, int, int, int], tuple[int, int], float]] = []
     star_pairs = list(combinations(range(1, 13), 2))
     for main_idx, mains in enumerate(combinations(range(1, 51), 5)):
-        if main_idx >= 500:
-            break
         stars = star_pairs[main_idx % len(star_pairs)]
         candidates.append((mains, stars, 0.0))
     return candidates

@@ -61,3 +61,20 @@ def test_predict_accepts_tuned_model_params() -> None:
         },
     )
     assert len(preds) == 3
+
+
+def test_predict_fills_top_n_with_strict_diversity() -> None:
+    history = [DrawRecord(i, tuple(range(1, 6)), (1, 2)) for i in range(1, 260)]
+    preds = generate_predictions(
+        history,
+        top=3,
+        model_params={
+            "max_main_overlap": 1,
+            "require_distinct_star_pairs": 1,
+        },
+    )
+    assert len(preds) == 3
+    assert len({p["stars"] for p in preds}) == 3
+    for idx, pred in enumerate(preds):
+        for other in preds[idx + 1 :]:
+            assert len(set(pred["mains"]) & set(other["mains"])) <= 1
