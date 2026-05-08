@@ -15,3 +15,17 @@ def test_predict_returns_top_n_valid() -> None:
         stars = p["stars"]
         assert len(mains) == 5 and len(set(mains)) == 5 and tuple(sorted(mains)) == mains
         assert len(stars) == 2 and len(set(stars)) == 2 and tuple(sorted(stars)) == stars
+
+
+def test_predict_diversity_constraints() -> None:
+    history = [DrawRecord(i, (1, 2, 3, 4, 5), (1, 2)) for i in range(1, 320)]
+    preds = generate_predictions(
+        history,
+        top=3,
+        seed=42,
+        max_main_overlap=3,
+        require_distinct_star_pairs=True,
+    )
+    assert len(preds) == 3
+    assert len({p["stars"] for p in preds}) >= 2
+    assert len(set(preds[0]["mains"]) & set(preds[1]["mains"])) <= 3

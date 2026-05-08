@@ -13,6 +13,8 @@ def test_backtest_deterministic_with_seed() -> None:
         )
         for i in range(1, 260)
     ]
-    r1 = run_walk_forward(draws, top=3, min_training_draws=200, seed=42)
-    r2 = run_walk_forward(draws, top=3, min_training_draws=200, seed=42)
+    r1 = run_walk_forward(draws, top=3, min_training_draws=200, seed=42, evaluation_mode="fast")
+    r2 = run_walk_forward(draws, top=3, min_training_draws=200, seed=42, evaluation_mode="fast")
     assert r1 == r2
+    assert r1.evaluation_stride == 10
+    assert r1.evaluated_draws >= r1.rounds

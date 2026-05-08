@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 from typing import Any
 from pathlib import Path
 
@@ -70,38 +71,90 @@ def update_results() -> None:
 
 
 @app.command("backtest")
-def backtest(top: int = typer.Option(3, "--top"), from_date: str | None = typer.Option(None, "--from-date")) -> None:
+def backtest(
+    top: int = typer.Option(3, "--top"),
+    from_date: str | None = typer.Option(None, "--from-date"),
+    evaluation_mode: Literal["fast", "full"] = typer.Option("fast", "--evaluation-mode"),
+) -> None:
     engine = _engine()
     with begin(engine) as conn:
         records = load_draw_records(conn)
     if from_date:
         _ = from_date
     cfg = load_config()
-    result = run_walk_forward(records, top=top, min_training_draws=cfg.min_training_draws, seed=cfg.random_seed)
+    result = run_walk_forward(
+        records,
+        top=top,
+        min_training_draws=cfg.min_training_draws,
+        seed=cfg.random_seed,
+        evaluation_mode=evaluation_mode,
+    )
     typer.echo(json.dumps(result.__dict__, indent=2))
 
 
 @app.command("optimise")
-def optimise(trials: int | None = typer.Option(None, "--trials"), top: int = typer.Option(3, "--top")) -> None:
+def optimise(
+    trials: int | None = typer.Option(None, "--trials"),
+    top: int = typer.Option(3, "--top"),
+    study_name: str = typer.Option("eml_optimisation", "--study-name"),
+    storage: str = typer.Option("sqlite:///outputs/optuna_study.sqlite", "--storage"),
+    n_jobs: int = typer.Option(1, "--n-jobs"),
+    timeout_seconds: int | None = typer.Option(None, "--timeout-seconds"),
+    evaluation_mode: Literal["fast", "full"] = typer.Option("fast", "--evaluation-mode"),
+) -> None:
     engine = _engine()
     with begin(engine) as conn:
         records = load_draw_records(conn)
     picked_trials = recommended_trials(len(records)) if trials is None else trials
-    params = optimise_weights(records, trials=picked_trials, top=top)
+    report = optimise_weights(
+        records,
+        trials=picked_trials,
+        top=top,
+        study_name=study_name,
+        storage=storage,
+        n_jobs=n_jobs,
+        timeout_seconds=timeout_seconds,
+        evaluation_mode=evaluation_mode,
+        holdout_fraction=load_config().optimisation.holdout_fraction,
+    )
     Path("outputs").mkdir(parents=True, exist_ok=True)
-    Path("outputs/best_params.json").write_text(json.dumps(params, indent=2), encoding="utf-8")
+    Path("outputs/best_params.json").write_text(json.dumps(report["best_params"], indent=2), encoding="utf-8")
     typer.echo(f"recommended_trials={recommended_trials(len(records))}")
     typer.echo(f"trials_used={picked_trials}")
-    typer.echo(json.dumps(params, indent=2))
+    typer.echo(f"completed_trials={report['completed_trials']}")
+    typer.echo(f"evaluation_mode={report['evaluation_mode']}")
+    typer.echo(
+        "holdout_metrics="
+        + json.dumps(
+            {
+                "model_points": report["holdout"]["model_points"],
+                "baseline_points": report["holdout"]["baseline_points"],
+                "uplift_points": report["holdout"]["uplift_points"],
+                "rounds": report["holdout"]["rounds"],
+                "sampled": report["holdout"]["sampled"],
+                "evaluation_stride": report["holdout"]["evaluation_stride"],
+            }
+        )
+    )
+    typer.echo(json.dumps(report, indent=2))
 
 
 @app.command("predict")
-def predict(top: int = typer.Option(3, "--top")) -> None:
+def predict(
+    top: int = typer.Option(3, "--top"),
+    max_main_overlap: int = typer.Option(3, "--max-main-overlap"),
+    require_distinct_star_pairs: bool = typer.Option(True, "--require-distinct-star-pairs"),
+) -> None:
     update_results()
     engine = _engine()
     with begin(engine) as conn:
         records = load_draw_records(conn)
-    ranked = generate_predictions(records, top=top)
+    ranked = generate_predictions(
+        records,
+        top=top,
+        max_main_overlap=max_main_overlap,
+        require_distinct_star_pairs=require_distinct_star_pairs,
+    )
     save_predictions(ranked)
     for row in ranked:
         mains_tuple = row["mains"]
