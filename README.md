@@ -30,7 +30,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 
 ## Hetzner
 
-Use `scripts/run_hetzner_optimisation.sh` for long-running server optimisation. It activates `.venv`, pulls latest `main`, runs the smoke test, initialises the DB if needed, runs persistent SQLite-backed Optuna optimisation, then prints the final top 3 predictions.
+Use `scripts/bootstrap_hetzner.sh` to prepare a new server, then `scripts/run_optimisation.sh` for long-running optimisation. The run script resumes persistent SQLite-backed Optuna optimisation, writes logs, runs prediction, and prints the final top 3 predictions.
 
 Recovery instructions are in `docs/hetzner_runbook.md`.
 

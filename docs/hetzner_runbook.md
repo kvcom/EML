@@ -1,140 +1,193 @@
-# Hetzner Optimisation Runbook
+# Hetzner Runbook
 
-This runbook is for long-running EuroMillions optimisation on a Hetzner server.
+This is the operational runbook for running the EML EuroMillions optimiser on a Hetzner server.
 
-## First-Time Setup
+## 1. Connect To The Server
 
-1. Clone the repository and enter it.
+From your local machine:
 
-   ```bash
-   git clone git@github.com:kvcom/EML.git
-   cd EML
-   ```
+```bash
+ssh root@YOUR_SERVER_IP
+```
 
-2. Create the virtual environment.
+If you created a non-root user, use that instead:
 
-   ```bash
-   python3.12 -m venv .venv
-   source .venv/bin/activate
-   python -m pip install --upgrade pip
-   python -m pip install -e ".[dev]"
-   ```
+```bash
+ssh YOUR_USER@YOUR_SERVER_IP
+```
 
-3. Put the historical Excel file at either `All Numbers.xlsx` or `data/All Numbers.xlsx`.
+## 2. Clone The Repository
 
-## Recommended Run
+On the Hetzner server:
 
-Run inside `tmux` or `screen` so the terminal can disconnect safely.
+```bash
+git clone https://github.com/kvcom/EML.git
+cd EML
+```
+
+If you prefer SSH deploy keys:
+
+```bash
+git clone git@github.com:kvcom/EML.git
+cd EML
+```
+
+## 3. Add Required Data
+
+The bootstrap script needs either an existing SQLite database or the historical Excel workbook.
+
+Expected locations:
+
+```text
+data/db/euromillions.sqlite
+data/All Numbers.xlsx
+All Numbers.xlsx
+```
+
+If copying the Excel file from your local machine:
+
+```bash
+scp "All Numbers.xlsx" root@YOUR_SERVER_IP:/root/EML/
+```
+
+Adjust `/root/EML/` if you cloned somewhere else or use a non-root user.
+
+## 4. Run Bootstrap
+
+Bootstrap installs apt packages, creates `.venv`, installs the project, runs quality checks, verifies data, initialises the DB if needed, and runs the smoke test.
+
+```bash
+chmod +x scripts/bootstrap_hetzner.sh scripts/run_optimisation.sh
+scripts/bootstrap_hetzner.sh
+```
+
+Successful bootstrap should end with:
+
+```text
+smoke-test: ok
+Bootstrap complete
+```
+
+## 5. Start Optimisation In tmux
+
+Use `tmux` so the optimiser continues if your SSH session disconnects.
 
 ```bash
 tmux new -s eml
-TRIALS=5000 MODE=fast N_JOBS=1 TIMEOUT_SECONDS=21600 scripts/run_hetzner_optimisation.sh
 ```
 
-The script will:
+Inside tmux:
 
-- activate `.venv`
-- pull latest `main`
-- install the package
-- initialise the SQLite draw database if needed
-- run `python -m euromillions.cli smoke-test`
-- run persistent Optuna optimisation
-- run `predict --top 3`
-- print the final top 3 predictions
-
-## Persistent State
-
-Optuna state is stored by default in:
-
-```text
-outputs/optuna_study.sqlite
+```bash
+cd EML
+TRIALS=5000 TIMEOUT_SECONDS=21600 N_JOBS=1 MODE=fast STUDY_NAME=eml_hetzner STORAGE=sqlite:///outputs/optuna_study.sqlite scripts/run_optimisation.sh
 ```
 
-The default study name is:
+For a full evaluation run:
 
-```text
-eml_hetzner
+```bash
+TRIALS=5000 TIMEOUT_SECONDS=21600 N_JOBS=1 MODE=full STUDY_NAME=eml_hetzner_full STORAGE=sqlite:///outputs/optuna_study.sqlite scripts/run_optimisation.sh
 ```
 
-To resume after a reboot or SSH disconnection, run the same command again with the same `STUDY_NAME` and `STORAGE`. The optimiser uses `load_if_exists=True` and continues the existing study.
+The script resumes the same Optuna study when `STUDY_NAME` and `STORAGE` are unchanged.
 
-## Logs And Outputs
+## 6. Detach And Reattach tmux
 
-Run logs:
+Detach without stopping the optimiser:
 
 ```text
-logs/hetzner_optimisation_YYYYMMDD_HHMMSS.log
+Ctrl-b then d
+```
+
+List sessions:
+
+```bash
+tmux ls
+```
+
+Reattach:
+
+```bash
+tmux attach -t eml
+```
+
+## 7. Monitor Progress
+
+Logs are written to:
+
+```text
+logs/optimisation_YYYYMMDD_HHMMSS.log
 logs/optimise_YYYYMMDD_HHMMSS.log
+```
+
+Watch the latest optimisation log:
+
+```bash
+tail -f logs/optimise_*.log
 ```
 
 Core outputs:
 
 ```text
+outputs/optuna_study.sqlite
 outputs/optimisation_report.json
 outputs/best_params.json
 outputs/predictions_latest.json
 outputs/predictions_latest.csv
 ```
 
-The optimisation report includes:
+The optimisation report includes commit hash, draw count, latest draw date, config hash, start time, finish time, trial counts, and holdout metrics.
 
-- commit hash
-- draw count
-- latest draw date
-- config hash
-- started_at
-- finished_at
-- study name and storage
-- existing, new, and completed trial counts
-- holdout metrics against random baseline
+## 8. Copy Results Back
 
-## Recovery
-
-If the server reboots:
+From your local machine:
 
 ```bash
+mkdir -p eml_results
+scp root@YOUR_SERVER_IP:/root/EML/outputs/optimisation_report.json eml_results/
+scp root@YOUR_SERVER_IP:/root/EML/outputs/best_params.json eml_results/
+scp root@YOUR_SERVER_IP:/root/EML/outputs/predictions_latest.json eml_results/
+scp root@YOUR_SERVER_IP:/root/EML/outputs/predictions_latest.csv eml_results/
+scp root@YOUR_SERVER_IP:/root/EML/outputs/optuna_study.sqlite eml_results/
+```
+
+To copy logs:
+
+```bash
+scp 'root@YOUR_SERVER_IP:/root/EML/logs/*.log' eml_results/
+```
+
+Adjust paths and usernames if needed.
+
+## 9. Resume After Reboot Or Disconnect
+
+SSH back in:
+
+```bash
+ssh root@YOUR_SERVER_IP
 cd EML
-source .venv/bin/activate
-python -m euromillions.cli smoke-test
-STUDY_NAME=eml_hetzner STORAGE=sqlite:///outputs/optuna_study.sqlite scripts/run_hetzner_optimisation.sh
+tmux new -s eml
+STUDY_NAME=eml_hetzner STORAGE=sqlite:///outputs/optuna_study.sqlite scripts/run_optimisation.sh
 ```
 
-If the run stops during optimisation, do not delete `outputs/optuna_study.sqlite`. That file is the checkpoint.
+Do not delete `outputs/optuna_study.sqlite`; it is the Optuna checkpoint.
 
-If the repository changed during a run, inspect the current report before resuming:
+## 10. Safely Delete The Hetzner Server
+
+Before deletion, copy back anything you need from `outputs/` and `logs/`.
+
+Then either delete it in the Hetzner Cloud Console, or use the Hetzner CLI from your local machine:
 
 ```bash
-cat outputs/optimisation_report.json
-git rev-parse HEAD
+hcloud server list
+hcloud server shutdown SERVER_NAME_OR_ID
+hcloud server delete SERVER_NAME_OR_ID
 ```
 
-Resume only when you are comfortable continuing the same study under the current code/config. For a clean independent run, choose a new `STUDY_NAME` or a new SQLite storage file.
-
-## Useful Commands
-
-Fast local validation:
+Confirm the server is gone:
 
 ```bash
-python -m euromillions.cli smoke-test
-python -m pytest
-python -m ruff check .
-python -m mypy src
+hcloud server list
 ```
 
-Manual optimisation:
-
-```bash
-python -m euromillions.cli optimise \
-  --study-name eml_hetzner \
-  --storage sqlite:///outputs/optuna_study.sqlite \
-  --trials 5000 \
-  --mode fast \
-  --n-jobs 1 \
-  --timeout-seconds 21600
-```
-
-Manual prediction:
-
-```bash
-python -m euromillions.cli predict --top 3
-```
+Only delete the server after confirming `outputs/optuna_study.sqlite`, `outputs/optimisation_report.json`, and `outputs/predictions_latest.*` have been copied back.
