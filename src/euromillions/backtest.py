@@ -37,6 +37,7 @@ def run_walk_forward(
     max_rounds: int | None = None,
     start_index: int | None = None,
     end_index: int | None = None,
+    model_params: dict[str, float] | None = None,
 ) -> BacktestResult:
     if evaluation_stride is None:
         evaluation_stride = 10 if evaluation_mode == "fast" else 1
@@ -58,7 +59,7 @@ def run_walk_forward(
             break
         history = draws[:idx]
         actual = draws[idx]
-        preds = generate_predictions(history, top=top, seed=seed + idx)
+        preds = generate_predictions(history, top=top, seed=seed + idx, model_params=model_params)
         best_m, best_s = 0, 0
         for p in preds:
             m_hits, s_hits = _hits(p["mains"], p["stars"], actual)

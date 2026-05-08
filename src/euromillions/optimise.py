@@ -10,6 +10,7 @@ from optuna.trial import FrozenTrial
 
 from euromillions.backtest import run_walk_forward
 from euromillions.features import DrawRecord
+from euromillions.model_params import DEFAULT_MODEL_PARAMS
 
 
 def recommended_trials(draw_count: int) -> int:
@@ -44,6 +45,30 @@ def _optimise_logger(log_path: Path | None) -> logging.Logger:
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
     return logger
+
+
+def suggest_model_params(trial: optuna.Trial) -> dict[str, float]:
+    return {
+        "weighted_main_pool_size": float(trial.suggest_int("weighted_main_pool_size", 100, 1000, step=100)),
+        "weighted_star_pool_size": float(trial.suggest_int("weighted_star_pool_size", 12, 66)),
+        "weighted_top_number_count": float(trial.suggest_int("weighted_top_number_count", 10, 25)),
+        "weighted_freq_weight": trial.suggest_float("weighted_freq_weight", 0.0, 1.0),
+        "weighted_delay_weight": trial.suggest_float("weighted_delay_weight", 0.0, 1.0),
+        "weighted_main_weight": trial.suggest_float("weighted_main_weight", 0.0, 1.0),
+        "weighted_star_weight": trial.suggest_float("weighted_star_weight", 0.0, 1.0),
+        "bayesian_alpha": trial.suggest_float("bayesian_alpha", 0.1, 5.0, log=True),
+        "bayesian_main_pool_size": float(trial.suggest_int("bayesian_main_pool_size", 100, 1000, step=100)),
+        "bayesian_star_pair_count": float(trial.suggest_int("bayesian_star_pair_count", 5, 66)),
+        "bayesian_top_number_count": float(trial.suggest_int("bayesian_top_number_count", 10, 25)),
+        "bayesian_main_weight": trial.suggest_float("bayesian_main_weight", 0.0, 1.0),
+        "bayesian_star_weight": trial.suggest_float("bayesian_star_weight", 0.0, 1.0),
+        "ensemble_weighted_weight": trial.suggest_float("ensemble_weighted_weight", 0.0, 1.0),
+        "ensemble_bayesian_weight": trial.suggest_float("ensemble_bayesian_weight", 0.0, 1.0),
+        "candidate_pool_multiplier": float(trial.suggest_int("candidate_pool_multiplier", 50, 200, step=25)),
+        "candidate_pool_min": float(trial.suggest_int("candidate_pool_min", 250, 1000, step=250)),
+        "max_main_overlap": float(trial.suggest_int("max_main_overlap", 1, 4)),
+        "require_distinct_star_pairs": float(trial.suggest_categorical("require_distinct_star_pairs", [0, 1])),
+    }
 
 
 def optimise_weights(
@@ -83,11 +108,13 @@ def optimise_weights(
     def objective(trial: optuna.Trial) -> float:
         min_training = trial.suggest_int("min_training_draws", 100, 300)
         seed = trial.suggest_int("random_seed", 1, 1000)
+        model_params = suggest_model_params(trial)
         logger.info(
-            "trial %s started min_training_draws=%s random_seed=%s",
+            "trial %s started min_training_draws=%s random_seed=%s model_params=%s",
             trial.number,
             min_training,
             seed,
+            json.dumps(model_params, sort_keys=True),
         )
         result = run_walk_forward(
             train_draws,
@@ -95,6 +122,7 @@ def optimise_weights(
             min_training_draws=min_training,
             seed=seed,
             evaluation_mode=evaluation_mode,
+            model_params=model_params,
         )
         logger.info(
             "trial %s finished uplift_points=%.6f model_points=%.6f baseline_points=%.6f rounds=%s",
@@ -135,6 +163,10 @@ def optimise_weights(
 
     best_min_training = int(study.best_params.get("min_training_draws", 200))
     best_seed = int(study.best_params.get("random_seed", 42))
+    best_model_params = {
+        key: float(study.best_params.get(key, default))
+        for key, default in DEFAULT_MODEL_PARAMS.items()
+    }
     holdout_result = run_walk_forward(
         holdout_draws,
         top=top,
@@ -142,6 +174,7 @@ def optimise_weights(
         seed=best_seed,
         evaluation_mode=evaluation_mode,
         start_index=split_idx,
+        model_params=best_model_params,
     )
     completed_trials = len(study.trials)
     logger.info(
@@ -160,6 +193,7 @@ def optimise_weights(
         "new_trials": completed_trials - existing_trials,
         "best_value": float(study.best_value),
         "best_params": {k: float(v) for k, v in study.best_params.items()},
+        "best_model_params": best_model_params,
         "evaluation_mode": evaluation_mode,
         "mode": evaluation_mode,
         "metadata": metadata or {},

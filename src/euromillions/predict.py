@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from euromillions.features import DrawRecord
+from euromillions.model_params import bool_param, int_param, merge_model_params
 from euromillions.models.bayesian_frequency import BayesianFrequencyModel
 from euromillions.models.ensemble import EnsembleModel
 from euromillions.models.weighted_statistical import WeightedStatisticalModel
@@ -40,19 +41,55 @@ def generate_predictions(
     history: list[DrawRecord],
     top: int,
     seed: int = 42,
-    max_main_overlap: int = 3,
-    require_distinct_star_pairs: bool = True,
+    max_main_overlap: int | None = None,
+    require_distinct_star_pairs: bool | None = None,
+    model_params: dict[str, float] | None = None,
 ) -> list[PredictionRow]:
+    params = merge_model_params(model_params)
+    effective_max_main_overlap = (
+        int_param(params, "max_main_overlap") if max_main_overlap is None else max_main_overlap
+    )
+    effective_require_distinct_star_pairs = (
+        bool_param(params, "require_distinct_star_pairs")
+        if require_distinct_star_pairs is None
+        else require_distinct_star_pairs
+    )
     model = EnsembleModel(
-        weighted=WeightedStatisticalModel(main_pool_size=500, star_pool_size=66),
-        bayesian=BayesianFrequencyModel(alpha=1.0),
+        weighted=WeightedStatisticalModel(
+            main_pool_size=int_param(params, "weighted_main_pool_size"),
+            star_pool_size=int_param(params, "weighted_star_pool_size"),
+            top_number_count=int_param(params, "weighted_top_number_count"),
+            frequency_weight=params["weighted_freq_weight"],
+            delay_weight=params["weighted_delay_weight"],
+            main_weight=params["weighted_main_weight"],
+            star_weight=params["weighted_star_weight"],
+        ),
+        bayesian=BayesianFrequencyModel(
+            alpha=params["bayesian_alpha"],
+            main_pool_size=int_param(params, "bayesian_main_pool_size"),
+            star_pair_count=int_param(params, "bayesian_star_pair_count"),
+            top_number_count=int_param(params, "bayesian_top_number_count"),
+            main_weight=params["bayesian_main_weight"],
+            star_weight=params["bayesian_star_weight"],
+        ),
+        w_weighted=params["ensemble_weighted_weight"],
+        w_bayesian=params["ensemble_bayesian_weight"],
     )
     _ = seed
-    candidate_pool = max(top * 100, 500)
+    candidate_pool = max(
+        top * int_param(params, "candidate_pool_multiplier"),
+        int_param(params, "candidate_pool_min"),
+    )
     ranked = model.predict(history, top=candidate_pool)
     out: list[PredictionRow] = []
     for mains, stars, score in ranked:
-        if not _is_diverse_enough(out, mains, stars, max_main_overlap, require_distinct_star_pairs):
+        if not _is_diverse_enough(
+            out,
+            mains,
+            stars,
+            effective_max_main_overlap,
+            effective_require_distinct_star_pairs,
+        ):
             continue
         idx = len(out) + 1
         out.append(
@@ -102,10 +139,19 @@ def generate_predictions(
                 break
     if len(out) < top:
         return out
-    if require_distinct_star_pairs and len({row["stars"] for row in out}) < min(top, 66):
+    if effective_require_distinct_star_pairs and len({row["stars"] for row in out}) < min(top, 66):
         repair_star_pairs(out)
-    if not _selection_is_diverse(out, max_main_overlap, require_distinct_star_pairs):
-        out = repair_main_diversity(ranked, out, max_main_overlap, require_distinct_star_pairs)
+    if not _selection_is_diverse(
+        out,
+        effective_max_main_overlap,
+        effective_require_distinct_star_pairs,
+    ):
+        out = repair_main_diversity(
+            ranked,
+            out,
+            effective_max_main_overlap,
+            effective_require_distinct_star_pairs,
+        )
     return out
 
 

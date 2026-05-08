@@ -57,6 +57,16 @@ def _log_path(prefix: str = "optimise") -> Path:
     return Path("logs") / f"{prefix}_{stamp}.log"
 
 
+def _load_model_params(path: str) -> dict[str, float] | None:
+    params_path = Path(path)
+    if not params_path.exists():
+        return None
+    raw = json.loads(params_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return {str(k): float(v) for k, v in raw.items() if isinstance(v, int | float)}
+
+
 def _engine() -> Any:
     cfg = load_config()
     return create_db_engine(cfg.database_path)
@@ -235,18 +245,25 @@ def smoke_test() -> None:
 @app.command("predict")
 def predict(
     top: int = typer.Option(3, "--top"),
-    max_main_overlap: int = typer.Option(3, "--max-main-overlap"),
-    require_distinct_star_pairs: bool = typer.Option(True, "--require-distinct-star-pairs"),
+    max_main_overlap: int | None = typer.Option(None, "--max-main-overlap"),
+    require_distinct_star_pairs: bool | None = typer.Option(None, "--require-distinct-star-pairs"),
+    params_path: str = typer.Option("outputs/best_params.json", "--params-path"),
 ) -> None:
     update_results()
     engine = _engine()
     with begin(engine) as conn:
         records = load_draw_records(conn)
+    model_params = _load_model_params(params_path)
+    if model_params is None:
+        typer.echo(f"model_params=defaults; params file not found: {params_path}")
+    else:
+        typer.echo(f"model_params={params_path}")
     ranked = generate_predictions(
         records,
         top=top,
         max_main_overlap=max_main_overlap,
         require_distinct_star_pairs=require_distinct_star_pairs,
+        model_params=model_params,
     )
     save_predictions(ranked)
     for row in ranked:

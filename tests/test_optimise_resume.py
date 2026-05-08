@@ -48,5 +48,9 @@ def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
     assert report2["completed_trials"] >= report1["completed_trials"] + 1
     assert report2["existing_trials"] >= report1["completed_trials"]
     assert report2["metadata"]["commit_hash"] == "test"
+    assert "weighted_freq_weight" in report2["best_params"]
+    assert "bayesian_alpha" in report2["best_params"]
+    assert "ensemble_weighted_weight" in report2["best_params"]
+    assert "weighted_freq_weight" in report2["best_model_params"]
     assert log_path.exists()
     assert "starting optimisation" in log_path.read_text(encoding="utf-8")
