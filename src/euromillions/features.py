@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date
 from itertools import combinations
 
 import numpy as np
@@ -13,6 +14,7 @@ class DrawRecord:
     draw_id: int
     mains: tuple[int, int, int, int, int]
     stars: tuple[int, int]
+    draw_date: date | None = None
 
 
 def compute_frequency_features(history: list[DrawRecord], window: int | None = None) -> dict[int, float]:

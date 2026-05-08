@@ -12,6 +12,7 @@ def load_draw_records(conn: Connection) -> list[DrawRecord]:
             draw_id=int(r["id"]),
             mains=(int(r["m1"]), int(r["m2"]), int(r["m3"]), int(r["m4"]), int(r["m5"])),
             stars=(int(r["s1"]), int(r["s2"])),
+            draw_date=r["draw_date"],
         )
         for r in rows
     ]

@@ -78,3 +78,19 @@ def test_predict_fills_top_n_with_strict_diversity() -> None:
     for idx, pred in enumerate(preds):
         for other in preds[idx + 1 :]:
             assert len(set(pred["mains"]) & set(other["mains"])) <= 1
+
+
+def test_predict_top_more_than_available_star_pairs_does_not_hang() -> None:
+    history = [DrawRecord(i, tuple(range(1, 6)), (1, 2)) for i in range(1, 260)]
+    preds = generate_predictions(
+        history,
+        top=1000,
+        model_params={
+            "candidate_pool_multiplier": 1,
+            "candidate_pool_min": 1000,
+            "max_main_overlap": 4,
+            "require_distinct_star_pairs": 1,
+        },
+    )
+    assert len(preds) == 1000
+    assert len({p["stars"] for p in preds}) == 66

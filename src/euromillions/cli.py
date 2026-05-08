@@ -19,6 +19,7 @@ from euromillions.ingest_web import reconcile_and_insert
 from euromillions.io import load_draw_records
 from euromillions.optimise import optimise_weights, recommended_trials
 from euromillions.predict import generate_predictions, save_predictions
+from euromillions.rank_history import parse_thresholds, rank_historical_winners, save_rank_history
 from euromillions.schema import draws
 from euromillions.sources.beatlottery import BeatLotterySource
 from euromillions.sources.euro_millions_com import EuroMillionsComSource
@@ -278,6 +279,33 @@ def predict(
             f"Score: {row['score']:.5f}\n"
             f"Why: {row['why']}\n"
         )
+
+
+@app.command("rank-history")
+def rank_history(
+    mode: Literal["fast", "full"] = typer.Option("fast", "--mode"),
+    thresholds: str = typer.Option("1,3,10,100,500,1000,3000", "--thresholds"),
+    params_path: str = typer.Option("outputs/best_params.json", "--params-path"),
+    max_rounds: int | None = typer.Option(None, "--max-rounds"),
+) -> None:
+    engine = _engine()
+    with begin(engine) as conn:
+        records = load_draw_records(conn)
+    cfg = load_config()
+    model_params = _load_model_params(params_path)
+    parsed_thresholds = parse_thresholds(thresholds)
+    rows, summary = rank_historical_winners(
+        records,
+        min_training_draws=cfg.min_training_draws,
+        mode=mode,
+        thresholds=parsed_thresholds,
+        model_params=model_params,
+        max_rounds=max_rounds,
+    )
+    save_rank_history(rows, summary)
+    typer.echo(json.dumps(summary, indent=2))
+    typer.echo("wrote outputs/historical_winner_ranks.json")
+    typer.echo("wrote outputs/historical_winner_ranks.csv")
 
 
 @app.command("run")

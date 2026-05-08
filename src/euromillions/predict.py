@@ -22,6 +22,13 @@ class PredictionRow(TypedDict):
     why: str
 
 
+def _main_mask(mains: tuple[int, int, int, int, int]) -> int:
+    mask = 0
+    for number in mains:
+        mask |= 1 << number
+    return mask
+
+
 def _is_diverse_enough(
     selected: list[PredictionRow],
     candidate_mains: tuple[int, int, int, int, int],
@@ -29,13 +36,112 @@ def _is_diverse_enough(
     max_main_overlap: int,
     require_distinct_star_pairs: bool,
 ) -> bool:
+    candidate_mask = _main_mask(candidate_mains)
     for row in selected:
-        overlap = len(set(row["mains"]) & set(candidate_mains))
+        overlap = (_main_mask(row["mains"]) & candidate_mask).bit_count()
         if overlap > max_main_overlap:
             return False
-    if require_distinct_star_pairs and any(row["stars"] == candidate_stars for row in selected):
-        return False
+    if require_distinct_star_pairs:
+        used_stars = {row["stars"] for row in selected}
+        if len(used_stars) < 66 and candidate_stars in used_stars:
+            return False
     return True
+
+
+def _star_pair_target(top: int, require_distinct_star_pairs: bool) -> int:
+    if not require_distinct_star_pairs:
+        return 0
+    return min(top, 66)
+
+
+def _has_enough_star_pair_diversity(rows: list[PredictionRow], target: int) -> bool:
+    if target == 0:
+        return True
+    return len({row["stars"] for row in rows}) >= min(len(rows), target)
+
+
+def _should_skip_repeated_star_pair(
+    used_stars: set[tuple[int, int]],
+    stars: tuple[int, int],
+    target: int,
+) -> bool:
+    if target == 0 or len(used_stars) >= target:
+        return False
+    return stars in used_stars
+
+
+def _renumber(rows: list[PredictionRow]) -> list[PredictionRow]:
+    for idx, row in enumerate(rows, start=1):
+        row["rank"] = idx
+    return rows
+
+
+def _sort_for_prediction(
+    rows: list[PredictionRow],
+    star_pair_target: int,
+) -> list[PredictionRow]:
+    if star_pair_target == 0:
+        return _renumber(rows)
+    seen: set[tuple[int, int]] = set()
+    front: list[PredictionRow] = []
+    rest: list[PredictionRow] = []
+    for row in rows:
+        if len(seen) < star_pair_target and row["stars"] not in seen:
+            seen.add(row["stars"])
+            front.append(row)
+        else:
+            rest.append(row)
+    return _renumber(front + rest)
+
+
+def _can_select_candidate(
+    banned_main_subsets: set[tuple[int, ...]],
+    used_stars: set[tuple[int, int]],
+    candidate_mains: tuple[int, int, int, int, int],
+    candidate_stars: tuple[int, int],
+    max_main_overlap: int,
+    star_pair_target: int,
+) -> bool:
+    if star_pair_target and len(used_stars) < star_pair_target and candidate_stars in used_stars:
+        return False
+    subset_size = max_main_overlap + 1
+    return not any(subset in banned_main_subsets for subset in combinations(candidate_mains, subset_size))
+
+
+def _add_banned_main_subsets(
+    banned_main_subsets: set[tuple[int, ...]],
+    mains: tuple[int, int, int, int, int],
+    max_main_overlap: int,
+) -> None:
+    subset_size = max_main_overlap + 1
+    banned_main_subsets.update(combinations(mains, subset_size))
+
+
+def _append_prediction(
+    out: list[PredictionRow],
+    selected_masks: list[int],
+    banned_main_subsets: set[tuple[int, ...]],
+    used_tickets: set[tuple[tuple[int, int, int, int, int], tuple[int, int]]],
+    used_stars: set[tuple[int, int]],
+    mains: tuple[int, int, int, int, int],
+    stars: tuple[int, int],
+    score: float,
+    why: str,
+    max_main_overlap: int,
+) -> None:
+    out.append(
+        {
+            "rank": len(out) + 1,
+            "mains": mains,
+            "stars": stars,
+            "score": float(score),
+            "why": why,
+        }
+    )
+    selected_masks.append(_main_mask(mains))
+    _add_banned_main_subsets(banned_main_subsets, mains, max_main_overlap)
+    used_tickets.add((mains, stars))
+    used_stars.add(stars)
 
 
 def generate_predictions(
@@ -55,6 +161,7 @@ def generate_predictions(
         if require_distinct_star_pairs is None
         else require_distinct_star_pairs
     )
+    star_pair_target = _star_pair_target(top, effective_require_distinct_star_pairs)
     model = EnsembleModel(
         weighted=WeightedStatisticalModel(
             main_pool_size=int_param(params, "weighted_main_pool_size"),
@@ -83,77 +190,126 @@ def generate_predictions(
     )
     ranked = model.predict(history, top=candidate_pool)
     out: list[PredictionRow] = []
+    selected_masks: list[int] = []
+    banned_main_subsets: set[tuple[int, ...]] = set()
+    used_tickets: set[tuple[tuple[int, int, int, int, int], tuple[int, int]]] = set()
+    used_stars: set[tuple[int, int]] = set()
     for mains, stars, score in ranked:
-        if not _is_diverse_enough(
-            out,
+        if not _can_select_candidate(
+            banned_main_subsets,
+            used_stars,
             mains,
             stars,
             effective_max_main_overlap,
-            effective_require_distinct_star_pairs,
+            star_pair_target,
         ):
             continue
-        idx = len(out) + 1
-        out.append(
-            {
-                "rank": idx,
-                "mains": mains,
-                "stars": stars,
-                "score": float(score),
-                "why": "balanced score from frequency, delay, and smoothed probability",
-            }
+        _append_prediction(
+            out,
+            selected_masks,
+            banned_main_subsets,
+            used_tickets,
+            used_stars,
+            mains,
+            stars,
+            score,
+            "balanced score from frequency, delay, and smoothed probability",
+            effective_max_main_overlap,
         )
         if len(out) == top:
             break
     if len(out) < top:
-        used_stars = {row["stars"] for row in out}
         for mains, stars, score in ranked:
             if len(out) == top:
                 break
-            if stars in used_stars:
+            if _should_skip_repeated_star_pair(used_stars, stars, star_pair_target):
                 continue
-            if any(row["mains"] == mains and row["stars"] == stars for row in out):
+            if (mains, stars) in used_tickets:
                 continue
-            out.append(
-                {
-                    "rank": len(out) + 1,
-                    "mains": mains,
-                    "stars": stars,
-                    "score": float(score),
-                    "why": "balanced score from frequency, delay, and smoothed probability",
-                }
+            if not _can_select_candidate(
+                banned_main_subsets,
+                used_stars,
+                mains,
+                stars,
+                effective_max_main_overlap,
+                0,
+            ):
+                continue
+            _append_prediction(
+                out,
+                selected_masks,
+                banned_main_subsets,
+                used_tickets,
+                used_stars,
+                mains,
+                stars,
+                score,
+                "balanced score from frequency, delay, and smoothed probability",
+                effective_max_main_overlap,
             )
-            used_stars.add(stars)
     if len(out) < top:
         for mains, stars, score in ranked:
-            if any(row["mains"] == mains and row["stars"] == stars for row in out):
+            if (mains, stars) in used_tickets:
                 continue
-            out.append(
-                {
-                    "rank": len(out) + 1,
-                    "mains": mains,
-                    "stars": stars,
-                    "score": float(score),
-                    "why": "balanced score from frequency, delay, and smoothed probability",
-                }
+            if not _can_select_candidate(
+                banned_main_subsets,
+                used_stars,
+                mains,
+                stars,
+                effective_max_main_overlap,
+                0,
+            ):
+                continue
+            _append_prediction(
+                out,
+                selected_masks,
+                banned_main_subsets,
+                used_tickets,
+                used_stars,
+                mains,
+                stars,
+                score,
+                "balanced score from frequency, delay, and smoothed probability",
+                effective_max_main_overlap,
             )
             if len(out) == top:
                 break
     if len(out) < top:
-        out = repair_main_diversity(
-            ranked,
-            out,
-            effective_max_main_overlap,
-            effective_require_distinct_star_pairs,
-            target_count=top,
-        )
+        for mains, stars, score in fallback_diverse_candidates():
+            if len(out) == top:
+                break
+            if (mains, stars) in used_tickets:
+                continue
+            if not _can_select_candidate(
+                banned_main_subsets,
+                used_stars,
+                mains,
+                stars,
+                effective_max_main_overlap,
+                star_pair_target,
+            ):
+                continue
+            _append_prediction(
+                out,
+                selected_masks,
+                banned_main_subsets,
+                used_tickets,
+                used_stars,
+                mains,
+                stars,
+                score,
+                "deterministic fallback with enforced diversity",
+                effective_max_main_overlap,
+            )
     if len(out) < top:
-        return out
-    if effective_require_distinct_star_pairs and len({row["stars"] for row in out}) < min(top, 66):
+        return _sort_for_prediction(out, star_pair_target)
+    if not _has_enough_star_pair_diversity(out, star_pair_target):
         repair_star_pairs(out)
     if not _selection_is_diverse(
         out,
         effective_max_main_overlap,
         effective_require_distinct_star_pairs,
+        star_pair_target,
     ):
         out = repair_main_diversity(
             ranked,
@@ -168,17 +324,19 @@ def _selection_is_diverse(
     rows: list[PredictionRow],
     max_main_overlap: int,
     require_distinct_star_pairs: bool,
+    star_pair_target: int | None = None,
 ) -> bool:
+    target = _star_pair_target(len(rows), require_distinct_star_pairs) if star_pair_target is None else star_pair_target
     seen_stars: set[tuple[int, int]] = set()
     for idx, row in enumerate(rows):
         if require_distinct_star_pairs:
-            if row["stars"] in seen_stars:
+            if len(seen_stars) < target and row["stars"] in seen_stars:
                 return False
             seen_stars.add(row["stars"])
         for other in rows[idx + 1 :]:
             if len(set(row["mains"]) & set(other["mains"])) > max_main_overlap:
                 return False
-    return True
+    return _has_enough_star_pair_diversity(rows, target)
 
 
 def repair_star_pairs(rows: list[PredictionRow]) -> None:
@@ -246,9 +404,7 @@ def repair_main_diversity(
                 }
             )
             used_tickets.add((mains, stars))
-    for idx, row in enumerate(repaired, start=1):
-        row["rank"] = idx
-    return repaired
+    return _renumber(repaired)
 
 
 def fallback_diverse_candidates() -> Iterator[tuple[tuple[int, int, int, int, int], tuple[int, int], float]]:

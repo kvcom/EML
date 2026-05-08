@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from itertools import combinations
 
 from euromillions.features import DrawRecord
+from euromillions.topk import deterministic_top_k
 
 
 @dataclass
@@ -37,20 +38,19 @@ class BayesianFrequencyModel:
         mp = self._posterior_main_prob(history)
         sp = self._posterior_star_prob(history)
         top_number_count = max(5, min(50, self.top_number_count))
-        top_numbers = sorted(mp, key=lambda n: mp[n], reverse=True)[:top_number_count]
-        mains = sorted(
+        top_numbers = deterministic_top_k(range(1, 51), top_number_count, lambda n: mp[n])
+        mains = deterministic_top_k(
             ((c, sum(mp[n] for n in c) / 5.0) for c in combinations(sorted(top_numbers), 5)),
-            key=lambda x: x[1],
-            reverse=True,
-        )[: self.main_pool_size]
-        stars = sorted(
+            self.main_pool_size,
+            lambda x: x[1],
+        )
+        stars = deterministic_top_k(
             ((c, (sp[c[0]] + sp[c[1]]) / 2.0) for c in combinations(range(1, 13), 2)),
-            key=lambda x: x[1],
-            reverse=True,
+            66,
+            lambda x: x[1],
         )
         out = []
         for m, ms in mains[: max(top, 25)]:
             for s, ss in stars[: min(66, max(top, self.star_pair_count))]:
                 out.append((m, s, ms * self.main_weight + ss * self.star_weight))
-        out.sort(key=lambda x: x[2], reverse=True)
-        return out[:top]
+        return deterministic_top_k(out, top, lambda x: x[2])

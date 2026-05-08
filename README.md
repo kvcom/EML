@@ -16,6 +16,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `python -m euromillions.cli smoke-test`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --timeout-seconds 21600 --top 3`
 - `python -m euromillions.cli predict --top 3`
+- `python -m euromillions.cli rank-history --mode fast --thresholds 1,3,10,100,500,1000,3000`
 - `python -m euromillions.cli run`
 
 ## What each command does
@@ -26,6 +27,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `smoke-test`: validates the local environment, database, one fast walk-forward round, and one prediction before expensive runs.
 - `optimise`: resumes or creates a persistent Optuna study, logs progress to `logs/`, records run metadata, and reports holdout performance.
 - `predict`: updates data, refreshes features incrementally, and outputs top-N ranked predictions to terminal/JSON/CSV.
+- `rank-history`: ranks historical winning tickets using only prior draws and writes exact rank bucket reports to JSON/CSV.
 - `run`: convenience pipeline for update + feature refresh + prediction.
 
 ## Hetzner

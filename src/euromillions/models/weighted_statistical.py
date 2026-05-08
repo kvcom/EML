@@ -5,6 +5,7 @@ from itertools import combinations
 
 from euromillions.features import DrawRecord, compute_delay_features, compute_frequency_features
 from euromillions.scoring import score_main_combination_from_features, score_star_combination_from_counts
+from euromillions.topk import deterministic_top_k
 
 
 @dataclass
@@ -35,7 +36,11 @@ class WeightedStatisticalModel:
             for n in range(1, 47)
         }
         top_number_count = max(5, min(50, self.top_number_count))
-        top_numbers = sorted(number_scores, key=lambda n: number_scores[n], reverse=True)[:top_number_count]
+        top_numbers = deterministic_top_k(
+            range(1, 47),
+            top_number_count,
+            lambda n: number_scores[n],
+        )
         ordered_numbers = sorted(top_numbers)
         main_scores = [
             (
@@ -51,9 +56,8 @@ class WeightedStatisticalModel:
             )
             for comb in combinations(ordered_numbers, 5)
         ]
-        main_scores.sort(key=lambda x: x[1], reverse=True)
         mains_top_count = min(self.main_pool_size, max(top, 100))
-        mains_top = main_scores[:mains_top_count]
+        mains_top = deterministic_top_k(main_scores, mains_top_count, lambda x: x[1])
         star_counts = {s: 0 for s in range(1, 13)}
         for draw in history:
             star_counts[draw.stars[0]] += 1
@@ -63,11 +67,9 @@ class WeightedStatisticalModel:
             (stars, score_star_combination_from_counts(stars, star_counts, star_total))
             for stars in combinations(range(1, 13), 2)
         ]
-        star_candidates.sort(key=lambda x: x[1], reverse=True)
-        stars_top = star_candidates[: self.star_pool_size]
+        stars_top = deterministic_top_k(star_candidates, self.star_pool_size, lambda x: x[1])
         merged: list[tuple[tuple[int, int, int, int, int], tuple[int, int], float]] = []
         for mains, ms in mains_top:
             for stars, ss in stars_top:
                 merged.append((mains, stars, ms * self.main_weight + ss * self.star_weight))
-        merged.sort(key=lambda x: x[2], reverse=True)
-        return merged[:top]
+        return deterministic_top_k(merged, top, lambda x: x[2])
