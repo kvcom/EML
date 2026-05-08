@@ -1,0 +1,2 @@
+[console_scripts]
+euromillions = euromillions.cli:app

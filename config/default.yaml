@@ -1,0 +1,15 @@
+database_path: data/db/euromillions.sqlite
+min_training_draws: 200
+top_predictions: 3
+random_seed: 42
+main_candidate_pool_size: 10000
+star_candidate_pool_size: 66
+enabled_sources:
+  - euro_millions_com
+  - beatlottery
+  - pedro_api
+  - national_lottery
+optimisation:
+  trials: 500
+  holdout_fraction: 0.2
+  timeout_seconds: null

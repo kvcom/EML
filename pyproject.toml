@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "euromillions-predictor"
+version = "0.1.0"
+description = "EuroMillions historical analytics, backtesting, and ranked ticket generation."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "beautifulsoup4",
+  "httpx",
+  "numpy",
+  "optuna",
+  "openpyxl",
+  "pandas",
+  "pydantic>=2",
+  "python-dateutil",
+  "pyyaml",
+  "scikit-learn",
+  "scipy",
+  "sqlalchemy>=2",
+  "typer",
+]
+
+[project.optional-dependencies]
+dev = ["mypy", "pytest", "ruff"]
+
+[project.scripts]
+euromillions = "euromillions.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true

@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from datetime import date
+
+import httpx
+from bs4 import BeautifulSoup
+
+from euromillions.sources.base import DrawResult
+
+
+class EuroMillionsComSource:
+    name = "euro_millions_com"
+    url = "https://www.euro-millions.com/results"
+
+    def fetch_latest(self) -> list[DrawResult]:
+        try:
+            resp = httpx.get(self.url, timeout=10.0)
+            resp.raise_for_status()
+        except Exception:
+            return []
+        soup = BeautifulSoup(resp.text, "html.parser")
+        nums = [int(n.text) for n in soup.select(".balls .ball, .numbers .ball") if n.text.isdigit()]
+        if len(nums) < 7:
+            return []
+        mains = tuple(sorted(nums[:5]))
+        stars = tuple(sorted(nums[5:7]))
+        return [
+            DrawResult(
+                draw_date=date.today(),
+                mains=(mains[0], mains[1], mains[2], mains[3], mains[4]),
+                stars=(stars[0], stars[1]),
+                source_url=self.url,
+                raw_payload=resp.text[:5000],
+            )
+        ]
+
+    def fetch_since(self, since_date: date) -> list[DrawResult]:
+        return self.fetch_latest()
