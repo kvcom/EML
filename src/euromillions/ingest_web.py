@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from hashlib import sha256
 
 from sqlalchemy import Connection
@@ -23,6 +23,11 @@ def reconcile_and_insert(conn: Connection, sources: list[ResultSource]) -> tuple
     for source in sources:
         draws = source.fetch_latest()
         for draw in draws:
+            if draw.status != "ok":
+                continue
+            if draw.draw_date > date.today():
+                warnings.append(f"future-dated result from {source.name} on {draw.draw_date}; skipped")
+                continue
             key = draw.draw_date.isoformat()
             grouped[key].append((source.name, draw))
             conn.execute(

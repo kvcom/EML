@@ -10,16 +10,7 @@ class NationalLotterySource:
     url = "https://www.national-lottery.co.uk/results/euromillions"
 
     def fetch_latest(self) -> list[DrawResult]:
-        return [
-            DrawResult(
-                draw_date=date.today(),
-                mains=(1, 2, 3, 4, 5),
-                stars=(1, 2),
-                source_url=self.url,
-                raw_payload="unavailable_or_js_blocked",
-                status="unavailable",
-            )
-        ]
+        return []
 
     def fetch_since(self, since_date: date) -> list[DrawResult]:
         return self.fetch_latest()

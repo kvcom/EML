@@ -20,13 +20,18 @@ class PedroApiSource:
             return []
         nums = payload.get("numbers", [])
         stars = payload.get("stars", [])
-        if len(nums) != 5 or len(stars) != 2:
+        raw_date = payload.get("date")
+        if len(nums) != 5 or len(stars) != 2 or not raw_date:
+            return []
+        try:
+            parsed_date = date.fromisoformat(str(raw_date)[:10])
+        except ValueError:
             return []
         m = tuple(sorted(int(x) for x in nums))
         s = tuple(sorted(int(x) for x in stars))
         return [
             DrawResult(
-                draw_date=date.fromisoformat(payload.get("date", date.today().isoformat())),
+                draw_date=parsed_date,
                 mains=(m[0], m[1], m[2], m[3], m[4]),
                 stars=(s[0], s[1]),
                 source_url=self.url,

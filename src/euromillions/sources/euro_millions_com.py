@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+import re
 
 import httpx
 from bs4 import BeautifulSoup
@@ -12,6 +13,25 @@ class EuroMillionsComSource:
     name = "euro_millions_com"
     url = "https://www.euro-millions.com/results"
 
+    @staticmethod
+    def _parse_draw_date(soup: BeautifulSoup) -> date | None:
+        for tag in soup.select("time[datetime]"):
+            raw = tag.get("datetime")
+            if not isinstance(raw, str) or not raw:
+                continue
+            try:
+                return date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+        text = soup.get_text(" ", strip=True)
+        match = re.search(r"\b(\d{1,2}\s+[A-Za-z]+\s+\d{4})\b", text)
+        if match is None:
+            return None
+        try:
+            return datetime.strptime(match.group(1), "%d %B %Y").date()
+        except ValueError:
+            return None
+
     def fetch_latest(self) -> list[DrawResult]:
         try:
             resp = httpx.get(self.url, timeout=10.0)
@@ -19,6 +39,9 @@ class EuroMillionsComSource:
         except Exception:
             return []
         soup = BeautifulSoup(resp.text, "html.parser")
+        parsed_date = self._parse_draw_date(soup)
+        if parsed_date is None:
+            return []
         nums = [int(n.text) for n in soup.select(".balls .ball, .numbers .ball") if n.text.isdigit()]
         if len(nums) < 7:
             return []
@@ -26,7 +49,7 @@ class EuroMillionsComSource:
         stars = tuple(sorted(nums[5:7]))
         return [
             DrawResult(
-                draw_date=date.today(),
+                draw_date=parsed_date,
                 mains=(mains[0], mains[1], mains[2], mains[3], mains[4]),
                 stars=(stars[0], stars[1]),
                 source_url=self.url,
