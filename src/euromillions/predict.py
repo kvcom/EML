@@ -328,14 +328,16 @@ def _selection_is_diverse(
 ) -> bool:
     target = _star_pair_target(len(rows), require_distinct_star_pairs) if star_pair_target is None else star_pair_target
     seen_stars: set[tuple[int, int]] = set()
-    for idx, row in enumerate(rows):
+    banned_main_subsets: set[tuple[int, ...]] = set()
+    for row in rows:
         if require_distinct_star_pairs:
             if len(seen_stars) < target and row["stars"] in seen_stars:
                 return False
             seen_stars.add(row["stars"])
-        for other in rows[idx + 1 :]:
-            if len(set(row["mains"]) & set(other["mains"])) > max_main_overlap:
-                return False
+        subset_size = max_main_overlap + 1
+        if any(subset in banned_main_subsets for subset in combinations(row["mains"], subset_size)):
+            return False
+        _add_banned_main_subsets(banned_main_subsets, row["mains"], max_main_overlap)
     return _has_enough_star_pair_diversity(rows, target)
 
 
@@ -363,28 +365,58 @@ def repair_main_diversity(
     target_count: int | None = None,
 ) -> list[PredictionRow]:
     repaired: list[PredictionRow] = []
+    selected_masks: list[int] = []
+    banned_main_subsets: set[tuple[int, ...]] = set()
     used_tickets: set[tuple[tuple[int, int, int, int, int], tuple[int, int]]] = set()
+    used_stars: set[tuple[int, int]] = set()
     target = len(current) if target_count is None else target_count
+    star_pair_target = _star_pair_target(target, require_distinct_star_pairs)
     for original in current:
-        if _is_diverse_enough(repaired, original["mains"], original["stars"], max_main_overlap, require_distinct_star_pairs):
-            repaired.append(original)
-            used_tickets.add((original["mains"], original["stars"]))
+        if _can_select_candidate(
+            banned_main_subsets,
+            used_stars,
+            original["mains"],
+            original["stars"],
+            max_main_overlap,
+            star_pair_target,
+        ):
+            _append_prediction(
+                repaired,
+                selected_masks,
+                banned_main_subsets,
+                used_tickets,
+                used_stars,
+                original["mains"],
+                original["stars"],
+                original["score"],
+                original["why"],
+                max_main_overlap,
+            )
             continue
         for mains, stars, score in ranked:
             if (mains, stars) in used_tickets:
                 continue
-            if not _is_diverse_enough(repaired, mains, stars, max_main_overlap, require_distinct_star_pairs):
+            if not _can_select_candidate(
+                banned_main_subsets,
+                used_stars,
+                mains,
+                stars,
+                max_main_overlap,
+                star_pair_target,
+            ):
                 continue
-            repaired.append(
-                {
-                    "rank": len(repaired) + 1,
-                    "mains": mains,
-                    "stars": stars,
-                    "score": float(score),
-                    "why": "balanced score with enforced combination diversity",
-                }
+            _append_prediction(
+                repaired,
+                selected_masks,
+                banned_main_subsets,
+                used_tickets,
+                used_stars,
+                mains,
+                stars,
+                score,
+                "balanced score with enforced combination diversity",
+                max_main_overlap,
             )
-            used_tickets.add((mains, stars))
             break
     if len(repaired) < target:
         for mains, stars, score in fallback_diverse_candidates():
@@ -392,18 +424,27 @@ def repair_main_diversity(
                 break
             if (mains, stars) in used_tickets:
                 continue
-            if not _is_diverse_enough(repaired, mains, stars, max_main_overlap, require_distinct_star_pairs):
+            if not _can_select_candidate(
+                banned_main_subsets,
+                used_stars,
+                mains,
+                stars,
+                max_main_overlap,
+                star_pair_target,
+            ):
                 continue
-            repaired.append(
-                {
-                    "rank": len(repaired) + 1,
-                    "mains": mains,
-                    "stars": stars,
-                    "score": score,
-                    "why": "deterministic fallback with enforced diversity",
-                }
+            _append_prediction(
+                repaired,
+                selected_masks,
+                banned_main_subsets,
+                used_tickets,
+                used_stars,
+                mains,
+                stars,
+                score,
+                "deterministic fallback with enforced diversity",
+                max_main_overlap,
             )
-            used_tickets.add((mains, stars))
     return _renumber(repaired)
 
 
