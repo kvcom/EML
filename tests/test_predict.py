@@ -27,5 +27,7 @@ def test_predict_diversity_constraints() -> None:
         require_distinct_star_pairs=True,
     )
     assert len(preds) == 3
-    assert len({p["stars"] for p in preds}) >= 2
-    assert len(set(preds[0]["mains"]) & set(preds[1]["mains"])) <= 3
+    assert len({p["stars"] for p in preds}) == 3
+    for idx, pred in enumerate(preds):
+        for other in preds[idx + 1 :]:
+            assert len(set(pred["mains"]) & set(other["mains"])) <= 3

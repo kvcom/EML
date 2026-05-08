@@ -19,6 +19,7 @@ def _synthetic_draws(n: int = 320) -> list[DrawRecord]:
 
 def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
     db = tmp_path / "optuna.sqlite"
+    log_path = tmp_path / "optimise.log"
     storage = f"sqlite:///{db.as_posix()}"
     study_name = "resume_test"
     draws = _synthetic_draws()
@@ -30,6 +31,8 @@ def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
         study_name=study_name,
         storage=storage,
         evaluation_mode="fast",
+        log_path=log_path,
+        metadata={"commit_hash": "test", "draw_count": len(draws)},
     )
     report2 = optimise_weights(
         draws,
@@ -38,6 +41,12 @@ def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
         study_name=study_name,
         storage=storage,
         evaluation_mode="fast",
+        log_path=log_path,
+        metadata={"commit_hash": "test", "draw_count": len(draws)},
     )
     assert report1["completed_trials"] >= 1
     assert report2["completed_trials"] >= report1["completed_trials"] + 1
+    assert report2["existing_trials"] >= report1["completed_trials"]
+    assert report2["metadata"]["commit_hash"] == "test"
+    assert log_path.exists()
+    assert "starting optimisation" in log_path.read_text(encoding="utf-8")

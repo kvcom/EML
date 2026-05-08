@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from typing import Literal
-from typing import Any
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Literal
 
 import typer
 from sqlalchemy import func, select
@@ -24,6 +26,35 @@ from euromillions.sources.national_lottery import NationalLotterySource
 from euromillions.sources.pedro_api import PedroApiSource
 
 app = typer.Typer()
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _commit_hash() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+    return result.stdout.strip()
+
+
+def _config_hash(path: str = "config/default.yaml") -> str:
+    config_path = Path(path)
+    if not config_path.exists():
+        return "missing"
+    return hashlib.sha256(config_path.read_bytes()).hexdigest()
+
+
+def _log_path(prefix: str = "optimise") -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path("logs") / f"{prefix}_{stamp}.log"
 
 
 def _engine() -> Any:
@@ -74,7 +105,7 @@ def update_results() -> None:
 def backtest(
     top: int = typer.Option(3, "--top"),
     from_date: str | None = typer.Option(None, "--from-date"),
-    evaluation_mode: Literal["fast", "full"] = typer.Option("fast", "--evaluation-mode"),
+    mode: Literal["fast", "full"] = typer.Option("fast", "--mode", "--evaluation-mode"),
 ) -> None:
     engine = _engine()
     with begin(engine) as conn:
@@ -87,7 +118,7 @@ def backtest(
         top=top,
         min_training_draws=cfg.min_training_draws,
         seed=cfg.random_seed,
-        evaluation_mode=evaluation_mode,
+        evaluation_mode=mode,
     )
     typer.echo(json.dumps(result.__dict__, indent=2))
 
@@ -100,12 +131,23 @@ def optimise(
     storage: str = typer.Option("sqlite:///outputs/optuna_study.sqlite", "--storage"),
     n_jobs: int = typer.Option(1, "--n-jobs"),
     timeout_seconds: int | None = typer.Option(None, "--timeout-seconds"),
-    evaluation_mode: Literal["fast", "full"] = typer.Option("fast", "--evaluation-mode"),
+    mode: Literal["fast", "full"] = typer.Option("fast", "--mode", "--evaluation-mode"),
 ) -> None:
+    started_at = _utc_now()
     engine = _engine()
     with begin(engine) as conn:
         records = load_draw_records(conn)
+        latest = conn.execute(select(func.max(draws.c.draw_date))).scalar_one()
     picked_trials = recommended_trials(len(records)) if trials is None else trials
+    log_path = _log_path()
+    metadata = {
+        "commit_hash": _commit_hash(),
+        "draw_count": len(records),
+        "latest_draw_date": latest.isoformat() if latest is not None else None,
+        "config_hash": _config_hash(),
+        "started_at": started_at,
+        "finished_at": None,
+    }
     report = optimise_weights(
         records,
         trials=picked_trials,
@@ -114,15 +156,24 @@ def optimise(
         storage=storage,
         n_jobs=n_jobs,
         timeout_seconds=timeout_seconds,
-        evaluation_mode=evaluation_mode,
+        evaluation_mode=mode,
         holdout_fraction=load_config().optimisation.holdout_fraction,
+        log_path=log_path,
+        metadata=metadata,
+        progress_callback=typer.echo,
     )
+    report["metadata"]["finished_at"] = _utc_now()
+    Path("outputs/optimisation_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     Path("outputs").mkdir(parents=True, exist_ok=True)
     Path("outputs/best_params.json").write_text(json.dumps(report["best_params"], indent=2), encoding="utf-8")
+    typer.echo(f"log_path={log_path}")
     typer.echo(f"recommended_trials={recommended_trials(len(records))}")
     typer.echo(f"trials_used={picked_trials}")
+    typer.echo(f"existing_trials={report['existing_trials']}")
+    typer.echo(f"new_trials={report['new_trials']}")
     typer.echo(f"completed_trials={report['completed_trials']}")
-    typer.echo(f"evaluation_mode={report['evaluation_mode']}")
+    typer.echo(f"mode={report['mode']}")
+    typer.echo("metadata=" + json.dumps(report["metadata"]))
     typer.echo(
         "holdout_metrics="
         + json.dumps(
@@ -137,6 +188,48 @@ def optimise(
         )
     )
     typer.echo(json.dumps(report, indent=2))
+
+
+@app.command("smoke-test")
+def smoke_test() -> None:
+    cfg = load_config()
+    typer.echo("smoke-test: starting")
+    typer.echo(f"commit_hash={_commit_hash()}")
+    typer.echo(f"config_hash={_config_hash()}")
+    engine = _engine()
+    create_all_tables(engine)
+    with begin(engine) as conn:
+        records = load_draw_records(conn)
+        latest = conn.execute(select(func.max(draws.c.draw_date))).scalar_one()
+    typer.echo(f"database_path={cfg.database_path}")
+    typer.echo(f"draw_count={len(records)}")
+    typer.echo(f"latest_draw_date={latest.isoformat() if latest is not None else None}")
+    if len(records) < cfg.min_training_draws + 1:
+        raise typer.BadParameter(
+            f"need at least {cfg.min_training_draws + 1} draws for smoke test, found {len(records)}"
+        )
+    backtest_result = run_walk_forward(
+        records,
+        top=1,
+        min_training_draws=cfg.min_training_draws,
+        seed=cfg.random_seed,
+        evaluation_mode="fast",
+        max_rounds=1,
+    )
+    preds = generate_predictions(records, top=1)
+    typer.echo(
+        "smoke_backtest="
+        + json.dumps(
+            {
+                "rounds": backtest_result.rounds,
+                "model_points": backtest_result.model_points,
+                "baseline_points": backtest_result.baseline_points,
+                "uplift_points": backtest_result.uplift_points,
+            }
+        )
+    )
+    typer.echo("smoke_prediction=" + json.dumps(preds[0]))
+    typer.echo("smoke-test: ok")
 
 
 @app.command("predict")

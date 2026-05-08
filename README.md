@@ -13,7 +13,8 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `python -m euromillions.cli update-results`
 - `python -m euromillions.cli build-combinations`
 - `python -m euromillions.cli backtest --top 3`
-- `python -m euromillions.cli optimise --trials 500 --top 3`
+- `python -m euromillions.cli smoke-test`
+- `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --timeout-seconds 21600 --top 3`
 - `python -m euromillions.cli predict --top 3`
 - `python -m euromillions.cli run`
 
@@ -22,9 +23,16 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `init-db`: creates SQLite schema, ingests historical draws from Excel, and builds all main/star combinations.
 - `update-results`: fetches latest observations from configured public sources and inserts safe reconciled updates.
 - `backtest`: runs walk-forward evaluation with no data leakage and random baseline comparison.
-- `optimise`: tunes weighted model parameters with Optuna and reports holdout performance.
+- `smoke-test`: validates the local environment, database, one fast walk-forward round, and one prediction before expensive runs.
+- `optimise`: resumes or creates a persistent Optuna study, logs progress to `logs/`, records run metadata, and reports holdout performance.
 - `predict`: updates data, refreshes features incrementally, and outputs top-N ranked predictions to terminal/JSON/CSV.
 - `run`: convenience pipeline for update + feature refresh + prediction.
+
+## Hetzner
+
+Use `scripts/run_hetzner_optimisation.sh` for long-running server optimisation. It activates `.venv`, pulls latest `main`, runs the smoke test, initialises the DB if needed, runs persistent SQLite-backed Optuna optimisation, then prints the final top 3 predictions.
+
+Recovery instructions are in `docs/hetzner_runbook.md`.
 
 ## Data sources
 
