@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterator
 from itertools import combinations
 from pathlib import Path
 from typing import TypedDict
@@ -250,13 +251,11 @@ def repair_main_diversity(
     return repaired
 
 
-def fallback_diverse_candidates() -> list[tuple[tuple[int, int, int, int, int], tuple[int, int], float]]:
-    candidates: list[tuple[tuple[int, int, int, int, int], tuple[int, int], float]] = []
+def fallback_diverse_candidates() -> Iterator[tuple[tuple[int, int, int, int, int], tuple[int, int], float]]:
     star_pairs = list(combinations(range(1, 13), 2))
     for main_idx, mains in enumerate(combinations(range(1, 51), 5)):
         stars = star_pairs[main_idx % len(star_pairs)]
-        candidates.append((mains, stars, 0.0))
-    return candidates
+        yield mains, stars, 0.0
 
 
 def save_predictions(predictions: list[PredictionRow], out_dir: str = "outputs") -> None:

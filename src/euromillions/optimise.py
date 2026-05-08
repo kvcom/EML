@@ -66,7 +66,7 @@ def suggest_model_params(trial: optuna.Trial) -> dict[str, float]:
         "ensemble_bayesian_weight": trial.suggest_float("ensemble_bayesian_weight", 0.0, 1.0),
         "candidate_pool_multiplier": float(trial.suggest_int("candidate_pool_multiplier", 50, 200, step=25)),
         "candidate_pool_min": float(trial.suggest_int("candidate_pool_min", 250, 1000, step=250)),
-        "max_main_overlap": float(trial.suggest_int("max_main_overlap", 1, 4)),
+        "max_main_overlap": float(trial.suggest_int("max_main_overlap", 2, 4)),
         "require_distinct_star_pairs": float(trial.suggest_categorical("require_distinct_star_pairs", [0, 1])),
     }
 

@@ -52,5 +52,6 @@ def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
     assert "bayesian_alpha" in report2["best_params"]
     assert "ensemble_weighted_weight" in report2["best_params"]
     assert "weighted_freq_weight" in report2["best_model_params"]
+    assert report2["best_params"]["max_main_overlap"] >= 2
     assert log_path.exists()
     assert "starting optimisation" in log_path.read_text(encoding="utf-8")
