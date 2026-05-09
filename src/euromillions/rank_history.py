@@ -29,10 +29,6 @@ class HistoricalRankRow:
     bucket: str
 
 
-def ticket_key(mains: tuple[int, ...], stars: tuple[int, ...]) -> tuple[int, ...]:
-    return tuple(mains) + tuple(stars)
-
-
 def bucket_for_rank(rank: int, thresholds: tuple[int, ...]) -> str:
     for threshold in thresholds:
         if rank <= threshold:
@@ -145,18 +141,10 @@ def exact_ticket_rank(
     actual_main_score = _main_component(actual_mains, freq, delay, main_posterior, history_len, params)
     actual_star_score = _star_component(actual_stars, star_counts, star_posterior, history_len, params)
     actual_score = actual_main_score + actual_star_score
-    actual_key = ticket_key(actual_mains, actual_stars)
     better = 0
-    for star_score, stars in star_scores:
+    for star_score, _stars in star_scores:
         threshold = actual_score - star_score
         better += len(sorted_scores) - bisect.bisect_right(sorted_scores, threshold)
-        left = bisect.bisect_left(sorted_scores, threshold)
-        right = bisect.bisect_right(sorted_scores, threshold)
-        if left == right:
-            continue
-        for _, mains in main_scores[left:right]:
-            if ticket_key(mains, stars) < actual_key:
-                better += 1
     return actual_score, better + 1
 
 

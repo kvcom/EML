@@ -36,6 +36,8 @@ Use `scripts/bootstrap_hetzner.sh` to prepare a new server, then `scripts/run_op
 
 Recovery instructions are in `docs/hetzner_runbook.md`.
 
+Optimisation objective guidance is in `docs/optimisation_objective.md`.
+
 ## Data sources
 
 Source adapters are under `src/euromillions/sources/`.  
