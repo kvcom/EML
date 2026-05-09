@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 
 from euromillions.features import DrawRecord
@@ -98,6 +100,8 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
         storage=storage,
         evaluation_mode="fast",
         log_path=log_path,
+        progress_path=tmp_path / "progress.json",
+        trials_path=tmp_path / "trials.csv",
     )
 
     assert report["objective"] == "exact-rank"
@@ -107,6 +111,13 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
     assert "max_main_overlap" not in report["best_params"]
     assert "weighted_freq_weight" in report["best_params"]
     assert seen_start_indexes[-1] is not None
+    progress = json.loads((tmp_path / "progress.json").read_text(encoding="utf-8"))
+    assert progress["status"] == "finished"
+    assert progress["completed_new_trials"] == 1
+    with (tmp_path / "trials.csv").open(newline="", encoding="utf-8") as fh:
+        trial_rows = list(csv.DictReader(fh))
+    assert len(trial_rows) == 1
+    assert trial_rows[0]["state"] == "COMPLETE"
 
 
 def test_exact_rank_early_stopping_uses_validation_not_holdout(

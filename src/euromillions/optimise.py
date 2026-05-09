@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable, Literal
 
 import optuna
@@ -102,6 +105,134 @@ def _model_params_from_study_params(params: dict[str, Any]) -> dict[str, float]:
     }
 
 
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+class OptimisationMonitor:
+    def __init__(
+        self,
+        progress_path: Path,
+        trials_path: Path,
+        requested_trials: int,
+        existing_trials: int,
+        study_name: str,
+        objective_name: str,
+        rank_backend: str,
+        started_at: str | None,
+    ) -> None:
+        self.progress_path = progress_path
+        self.trials_path = trials_path
+        self.requested_trials = requested_trials
+        self.existing_trials = existing_trials
+        self.study_name = study_name
+        self.objective_name = objective_name
+        self.rank_backend = rank_backend
+        self.started_at = started_at
+        self.current_trial_number: int | None = None
+        self.current_trial_started_at: str | None = None
+        self.current_trial_timer: float | None = None
+        self.last_trial_seconds: float | None = None
+        self.best_value: float | None = None
+        self.best_trial: int | None = None
+        self.completed_new_trials = 0
+        self.total_completed_trials = existing_trials
+        self.progress_path.parent.mkdir(parents=True, exist_ok=True)
+        self.trials_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.trials_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=[
+                    "trial",
+                    "state",
+                    "value",
+                    "best_value",
+                    "duration_seconds",
+                    "completed_new_trials",
+                    "total_completed_trials",
+                    "params_json",
+                ],
+            )
+            writer.writeheader()
+
+    def _payload(self, status: str) -> dict[str, Any]:
+        remaining = max(0, self.requested_trials - self.completed_new_trials)
+        estimated_remaining_seconds = (
+            remaining * self.last_trial_seconds if self.last_trial_seconds is not None else None
+        )
+        return {
+            "status": status,
+            "study_name": self.study_name,
+            "objective": self.objective_name,
+            "rank_backend": self.rank_backend,
+            "started_at": self.started_at,
+            "requested_trials": self.requested_trials,
+            "existing_trials": self.existing_trials,
+            "completed_new_trials": self.completed_new_trials,
+            "total_completed_trials": self.total_completed_trials,
+            "remaining_requested_trials": remaining,
+            "current_trial": self.current_trial_number,
+            "current_trial_started_at": self.current_trial_started_at,
+            "last_trial_seconds": self.last_trial_seconds,
+            "estimated_remaining_seconds": estimated_remaining_seconds,
+            "best_value": self.best_value,
+            "best_trial": self.best_trial,
+        }
+
+    def write(self, status: str) -> None:
+        _atomic_write_json(self.progress_path, self._payload(status))
+
+    def trial_started(self, trial_number: int, started_at: str) -> None:
+        self.current_trial_number = trial_number
+        self.current_trial_started_at = started_at
+        self.current_trial_timer = perf_counter()
+        self.write("running")
+
+    def trial_completed(self, study: optuna.Study, trial: FrozenTrial) -> None:
+        self.last_trial_seconds = (
+            perf_counter() - self.current_trial_timer
+            if self.current_trial_timer is not None
+            else None
+        )
+        self.completed_new_trials = max(0, len(study.trials) - self.existing_trials)
+        self.total_completed_trials = len(study.trials)
+        self.best_value = float(study.best_value)
+        self.best_trial = study.best_trial.number
+        with self.trials_path.open("a", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=[
+                    "trial",
+                    "state",
+                    "value",
+                    "best_value",
+                    "duration_seconds",
+                    "completed_new_trials",
+                    "total_completed_trials",
+                    "params_json",
+                ],
+            )
+            writer.writerow(
+                {
+                    "trial": trial.number,
+                    "state": trial.state.name,
+                    "value": trial.value,
+                    "best_value": self.best_value,
+                    "duration_seconds": self.last_trial_seconds,
+                    "completed_new_trials": self.completed_new_trials,
+                    "total_completed_trials": self.total_completed_trials,
+                    "params_json": json.dumps(dict(trial.params), sort_keys=True),
+                }
+            )
+        self.current_trial_number = None
+        self.current_trial_started_at = None
+        self.current_trial_timer = None
+        self.write("running")
+
+
 def optimise_weights(
     draws: list[DrawRecord],
     trials: int = 50,
@@ -119,6 +250,8 @@ def optimise_weights(
     early_stop_validation_rounds: int | None = 10,
     rank_backend: RankBackend = "auto",
     log_path: Path | None = None,
+    progress_path: Path | None = None,
+    trials_path: Path | None = None,
     metadata: dict[str, Any] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -159,6 +292,7 @@ def optimise_weights(
             trial,
             include_prediction_params=objective_name == "top-k",
         )
+        monitor.trial_started(trial.number, datetime.now(timezone.utc).isoformat(timespec="seconds"))
         logger.info(
             "trial %s started min_training_draws=%s random_seed=%s model_params=%s",
             trial.number,
@@ -214,6 +348,17 @@ def optimise_weights(
 
     existing_trials = len(study.trials)
     logger.info("loaded study=%s existing_trials=%s", study.study_name, existing_trials)
+    monitor = OptimisationMonitor(
+        progress_path=progress_path or Path("outputs/optimisation_progress.json"),
+        trials_path=trials_path or Path("outputs/optimisation_trials.csv"),
+        requested_trials=trials,
+        existing_trials=existing_trials,
+        study_name=study.study_name,
+        objective_name=objective_name,
+        rank_backend=rank_backend,
+        started_at=str((metadata or {}).get("started_at") or ""),
+    )
+    monitor.write("starting")
     early_stop_state: dict[str, float | int | bool | None] = {
         "best_validation_rank": None,
         "best_trial": None,
@@ -269,6 +414,7 @@ def optimise_weights(
             f"value={trial.value} total_trials={len(study.trials)} best_value={study.best_value}"
         )
         logger.info(message)
+        monitor.trial_completed(study, trial)
         if progress_callback is not None:
             progress_callback(message)
 
@@ -348,6 +494,8 @@ def optimise_weights(
         "mode": evaluation_mode,
         "metadata": metadata or {},
         "log_path": str(log_path) if log_path is not None else None,
+        "progress_path": str(monitor.progress_path),
+        "trials_path": str(monitor.trials_path),
         "early_stop": {
             "enabled": validation_enabled,
             "patience": early_stop_patience,
@@ -363,5 +511,6 @@ def optimise_weights(
         "holdout": holdout_payload,
     }
     Path("outputs/optimisation_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    monitor.write("finished")
     logger.info("wrote optimisation report outputs/optimisation_report.json")
     return report

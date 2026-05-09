@@ -62,6 +62,30 @@ the final holdout, checks average exact rank after each completed trial, and
 stops when validation rank does not improve for the configured patience. The
 final holdout remains a last unbiased check.
 
+## Long-run monitoring
+
+Every optimisation writes lightweight monitor files:
+
+- `outputs/optimisation_progress.json`: current status, active trial number,
+  completed trial count, best value, and rough remaining-time estimate based on
+  the last completed trial.
+- `outputs/optimisation_trials.csv`: trial history for the current invocation
+  with value, best value, duration, and parameters for each completed trial.
+
+On Linux servers, watch progress with:
+
+```bash
+watch -n 5 cat outputs/optimisation_progress.json
+tail -f outputs/optimisation_trials.csv
+```
+
+On Windows PowerShell:
+
+```powershell
+Get-Content outputs/optimisation_progress.json -Wait
+Get-Content outputs/optimisation_trials.csv -Wait
+```
+
 Do not use Top-1000 prediction output as the main optimiser objective. It mostly
 optimises the expensive "best hit among 1000 generated tickets" surface and
 candidate/diversity settings, which is a different question from ranking the

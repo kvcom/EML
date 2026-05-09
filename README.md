@@ -40,6 +40,11 @@ Recovery instructions are in `docs/hetzner_runbook.md`.
 
 Optimisation objective guidance is in `docs/optimisation_objective.md`.
 
+Long optimisation runs write live monitor files:
+
+- `outputs/optimisation_progress.json`: current status, active trial, best value, and rough remaining-time estimate.
+- `outputs/optimisation_trials.csv`: one row per completed trial.
+
 GPU acceleration is optional. Install it on CUDA-capable machines with:
 
 ```powershell

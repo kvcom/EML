@@ -195,6 +195,8 @@ def optimise(
     typer.echo(f"completed_trials={report['completed_trials']}")
     typer.echo(f"mode={report['mode']}")
     typer.echo(f"objective={report['objective']}")
+    typer.echo(f"progress_path={report['progress_path']}")
+    typer.echo(f"trials_path={report['trials_path']}")
     typer.echo("early_stop=" + json.dumps(report["early_stop"]))
     typer.echo("metadata=" + json.dumps(report["metadata"]))
     if objective == "exact-rank":
