@@ -17,7 +17,7 @@ from euromillions.db import begin, create_all_tables, create_db_engine
 from euromillions.ingest_excel import ingest_draw_rows, read_excel_draws
 from euromillions.ingest_web import reconcile_and_insert
 from euromillions.io import load_draw_records
-from euromillions.optimise import optimise_weights, recommended_trials
+from euromillions.optimise import OptimisationObjective, optimise_weights, recommended_trials
 from euromillions.predict import generate_predictions, save_predictions
 from euromillions.rank_history import parse_thresholds, rank_historical_winners, save_rank_history
 from euromillions.schema import draws
@@ -138,6 +138,7 @@ def backtest(
 def optimise(
     trials: int | None = typer.Option(None, "--trials"),
     top: int = typer.Option(3, "--top"),
+    objective: OptimisationObjective = typer.Option("exact-rank", "--objective"),
     study_name: str = typer.Option("eml_optimisation", "--study-name"),
     storage: str = typer.Option("sqlite:///outputs/optuna_study.sqlite", "--storage"),
     n_jobs: int = typer.Option(1, "--n-jobs"),
@@ -163,6 +164,7 @@ def optimise(
         records,
         trials=picked_trials,
         top=top,
+        objective_name=objective,
         study_name=study_name,
         storage=storage,
         n_jobs=n_jobs,
@@ -184,20 +186,35 @@ def optimise(
     typer.echo(f"new_trials={report['new_trials']}")
     typer.echo(f"completed_trials={report['completed_trials']}")
     typer.echo(f"mode={report['mode']}")
+    typer.echo(f"objective={report['objective']}")
     typer.echo("metadata=" + json.dumps(report["metadata"]))
-    typer.echo(
-        "holdout_metrics="
-        + json.dumps(
-            {
-                "model_points": report["holdout"]["model_points"],
-                "baseline_points": report["holdout"]["baseline_points"],
-                "uplift_points": report["holdout"]["uplift_points"],
-                "rounds": report["holdout"]["rounds"],
-                "sampled": report["holdout"]["sampled"],
-                "evaluation_stride": report["holdout"]["evaluation_stride"],
-            }
+    if objective == "exact-rank":
+        typer.echo(
+            "holdout_metrics="
+            + json.dumps(
+                {
+                    "average_rank": report["holdout"].get("average_rank"),
+                    "median_rank": report["holdout"].get("median_rank"),
+                    "evaluated_draws": report["holdout"]["evaluated_draws"],
+                    "sampled": report["holdout"]["sampled"],
+                    "evaluation_stride": report["holdout"]["evaluation_stride"],
+                }
+            )
         )
-    )
+    else:
+        typer.echo(
+            "holdout_metrics="
+            + json.dumps(
+                {
+                    "model_points": report["holdout"]["model_points"],
+                    "baseline_points": report["holdout"]["baseline_points"],
+                    "uplift_points": report["holdout"]["uplift_points"],
+                    "rounds": report["holdout"]["rounds"],
+                    "sampled": report["holdout"]["sampled"],
+                    "evaluation_stride": report["holdout"]["evaluation_stride"],
+                }
+            )
+        )
     typer.echo(json.dumps(report, indent=2))
 
 

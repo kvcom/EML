@@ -29,20 +29,40 @@ for roughly 125 to 145 fast-mode rounds per trial plus holdout rounds.
 This is exact deterministic prediction-output work, not exact historical
 rank-by-counting work.
 
-## Recommended architecture
+## Current architecture
 
-Use Top-3 as the primary Optuna objective because it matches the production
-prediction surface and is fast enough for many trials.
+Use exact full-ticket rank as the default Optuna objective:
 
-Use `rank-history` as a post-optimisation audit for exact historical winner
-rank buckets: `top_1`, `top_3`, `top_10`, `top_100`, `top_500`, `top_1000`,
-`top_3000`, and `outside`.
+```powershell
+python -m euromillions.cli optimise --objective exact-rank
+```
+
+This objective preserves exact rank semantics and maximises negative average
+rank, so lower historical winner ranks are better.
+
+Only scoring parameters are sampled for exact-rank optimisation. Prediction
+output parameters such as candidate-pool size and diversity constraints are
+left at defaults because they do not affect full-ticket score ranking.
+
+Top-3 remains available when the goal is specifically to tune the small final
+prediction set:
+
+```powershell
+python -m euromillions.cli optimise --objective top-k --top 3
+```
 
 Do not use Top-1000 prediction output as the main optimiser objective. It mostly
 optimises the expensive "best hit among 1000 generated tickets" surface and
 candidate/diversity settings, which is a different question from ranking the
 actual historical winner among all possible tickets.
 
-A future combined objective should be explicit and agreed before implementation,
-for example Top-3 uplift plus a small exact rank-bucket audit sample. It should
-preserve exact rank semantics: `rank = 1 + count(candidate_score > winner_score)`.
+A future combined objective should be explicit and agreed before implementation.
+It should preserve exact rank semantics:
+`rank = 1 + count(candidate_score > winner_score)`.
+
+## GPU note
+
+The current exact-rank implementation is CPU-bound Python/standard-library
+work. It will not use an NVIDIA GPU automatically. GPU acceleration would
+require a separate scorer/counting implementation using a GPU array library or
+compiled CUDA kernel.

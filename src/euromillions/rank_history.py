@@ -155,11 +155,15 @@ def rank_historical_winners(
     thresholds: tuple[int, ...] = DEFAULT_THRESHOLDS,
     model_params: dict[str, float] | None = None,
     max_rounds: int | None = None,
+    start_index: int | None = None,
+    end_index: int | None = None,
 ) -> tuple[list[HistoricalRankRow], dict[str, float | int | str]]:
     stride = 10 if mode == "fast" else 1
     limit = 250 if max_rounds is None and mode == "fast" else max_rounds
     rows: list[HistoricalRankRow] = []
-    for idx in range(min_training_draws, len(draws), stride):
+    start = max(min_training_draws, start_index or min_training_draws)
+    stop = end_index if end_index is not None else len(draws)
+    for idx in range(start, stop, stride):
         if limit is not None and len(rows) >= limit:
             break
         actual = draws[idx]

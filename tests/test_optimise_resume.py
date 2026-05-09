@@ -55,3 +55,54 @@ def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
     assert report2["best_params"]["max_main_overlap"] >= 2
     assert log_path.exists()
     assert "starting optimisation" in log_path.read_text(encoding="utf-8")
+
+
+def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> None:
+    db = tmp_path / "exact_rank_optuna.sqlite"
+    log_path = tmp_path / "exact_rank.log"
+    storage = f"sqlite:///{db.as_posix()}"
+    draws = _synthetic_draws()
+    seen_start_indexes: list[int | None] = []
+
+    def fake_rank_historical_winners(
+        draws,
+        min_training_draws,
+        mode="fast",
+        thresholds=(1, 3, 10, 100, 500, 1000, 3000),
+        model_params=None,
+        max_rounds=None,
+        start_index=None,
+        end_index=None,
+    ):
+        _ = draws, min_training_draws, mode, thresholds, model_params, max_rounds, end_index
+        seen_start_indexes.append(start_index)
+        summary = {
+            "mode": "fast",
+            "evaluated_draws": 2,
+            "evaluation_stride": 10,
+            "total_ticket_count": 139_838_160,
+            "random_expected_top_1000_rate": 1000 / 139_838_160,
+            "average_rank": 123.0,
+            "median_rank": 100.0,
+        }
+        return [], summary
+
+    monkeypatch.setattr("euromillions.optimise.rank_historical_winners", fake_rank_historical_winners)
+
+    report = optimise_weights(
+        draws,
+        trials=1,
+        objective_name="exact-rank",
+        study_name="exact_rank_test",
+        storage=storage,
+        evaluation_mode="fast",
+        log_path=log_path,
+    )
+
+    assert report["objective"] == "exact-rank"
+    assert report["best_value"] == -123.0
+    assert report["holdout"]["average_rank"] == 123.0
+    assert "candidate_pool_multiplier" not in report["best_params"]
+    assert "max_main_overlap" not in report["best_params"]
+    assert "weighted_freq_weight" in report["best_params"]
+    assert seen_start_indexes[-1] is not None
