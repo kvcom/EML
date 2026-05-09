@@ -73,7 +73,16 @@ It should preserve exact rank semantics:
 
 ## GPU note
 
-The current exact-rank implementation is CPU-bound Python/standard-library
-work. It will not use an NVIDIA GPU automatically. GPU acceleration would
-require a separate scorer/counting implementation using a GPU array library or
-compiled CUDA kernel.
+The exact-rank implementation now uses a vectorized NumPy backend: it precomputes
+all 2,118,760 main combinations once, scores them with array operations, sorts
+the score vector, and uses vectorized binary searches to count the exact rank.
+
+Measured after the vectorized backend:
+
+- `rank-history --mode fast --max-rounds 20`: about 2.1s.
+- `optimise --objective exact-rank --trials 1 --mode fast`: about 9.3s.
+
+Python currently does not have a usable CUDA array runtime in this environment:
+`cupy` and CUDA-enabled `torch` are not installed, and a trivial Numba CUDA
+kernel fails despite the RTX 5080 being visible to `nvidia-smi`. GPU acceleration
+therefore needs a clean CUDA Python runtime before it can be enabled safely.

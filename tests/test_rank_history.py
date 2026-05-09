@@ -7,6 +7,7 @@ from euromillions.features import DrawRecord
 from euromillions.rank_history import (
     bucket_for_rank,
     exact_ticket_rank,
+    exact_ticket_rank_vectorized,
     parse_thresholds,
     rank_historical_winners,
 )
@@ -59,6 +60,22 @@ def test_exact_ticket_rank_does_not_count_equal_score_ties(monkeypatch) -> None:
 
     monkeypatch.setattr("euromillions.rank_history.combinations", tiny_combinations)
     score, rank = exact_ticket_rank(
+        draws,
+        (1, 2, 3, 4, 6),
+        (1, 3),
+        model_params={
+            "ensemble_weighted_weight": 0,
+            "ensemble_bayesian_weight": 0,
+        },
+    )
+
+    assert score == 0
+    assert rank == 1
+
+
+def test_vectorized_exact_ticket_rank_does_not_count_equal_score_ties() -> None:
+    draws = [DrawRecord(i, tuple(range(1, 6)), (1, 2)) for i in range(1, 5)]
+    score, rank = exact_ticket_rank_vectorized(
         draws,
         (1, 2, 3, 4, 6),
         (1, 3),

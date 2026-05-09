@@ -4,10 +4,13 @@ import bisect
 import csv
 import json
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from statistics import mean, median
 from typing import Literal
+
+import numpy as np
 
 from euromillions.features import DrawRecord, compute_delay_features, compute_frequency_features
 from euromillions.model_params import merge_model_params
@@ -15,6 +18,7 @@ from euromillions.scoring import score_main_combination_from_features, score_sta
 
 TOTAL_TICKETS = 139_838_160
 DEFAULT_THRESHOLDS = (1, 3, 10, 100, 500, 1000, 3000)
+_ORIGINAL_COMBINATIONS = combinations
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,16 @@ def parse_thresholds(raw: str | None) -> tuple[int, ...]:
     if not thresholds or any(value <= 0 for value in thresholds):
         raise ValueError("thresholds must be positive comma-separated integers")
     return thresholds
+
+
+@lru_cache(maxsize=1)
+def _main_combinations_array() -> np.ndarray:
+    return np.array(list(combinations(range(1, 51), 5)), dtype=np.uint8)
+
+
+@lru_cache(maxsize=1)
+def _star_combinations_array() -> np.ndarray:
+    return np.array(list(combinations(range(1, 13), 2)), dtype=np.uint8)
 
 
 def _posterior_main_prob(history: list[DrawRecord], alpha: float) -> dict[int, float]:
@@ -109,12 +123,99 @@ def _star_component(
     )
 
 
+def _history_arrays(
+    history: list[DrawRecord],
+    alpha: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    main_counts = np.zeros(51, dtype=np.float64)
+    star_counts = np.zeros(13, dtype=np.float64)
+    last_seen = np.full(51, -1, dtype=np.int64)
+    for idx, draw in enumerate(history):
+        for number in draw.mains:
+            main_counts[number] += 1.0
+            last_seen[number] = idx
+        star_counts[draw.stars[0]] += 1.0
+        star_counts[draw.stars[1]] += 1.0
+    history_len = len(history)
+    latest_idx = history_len - 1
+    delays = np.zeros(51, dtype=np.float64)
+    for number in range(1, 51):
+        delays[number] = latest_idx - last_seen[number] if last_seen[number] >= 0 else history_len
+    main_posterior = (main_counts + alpha) / (history_len * 5.0 + 50.0 * alpha)
+    star_posterior = (star_counts + alpha) / (history_len * 2.0 + 12.0 * alpha)
+    return main_counts, star_counts, delays, main_posterior, star_posterior
+
+
+def _number_score_components(
+    history_len: int,
+    main_counts: np.ndarray,
+    star_counts: np.ndarray,
+    delays: np.ndarray,
+    main_posterior: np.ndarray,
+    star_posterior: np.ndarray,
+    params: dict[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    main_freq = main_counts / max(1.0, history_len * 5.0)
+    main_weighted = (
+        params["weighted_freq_weight"] * main_freq / 5.0
+        + params["weighted_delay_weight"] * delays / max(1.0, history_len * 5.0)
+    )
+    main_components = (
+        params["ensemble_weighted_weight"] * params["weighted_main_weight"] * main_weighted
+        + params["ensemble_bayesian_weight"] * params["bayesian_main_weight"] * main_posterior / 5.0
+    )
+    star_weighted = star_counts / max(1.0, history_len * 2.0)
+    star_components = (
+        params["ensemble_weighted_weight"] * params["weighted_star_weight"] * star_weighted
+        + params["ensemble_bayesian_weight"] * params["bayesian_star_weight"] * star_posterior / 2.0
+    )
+    return main_components, star_components
+
+
+def exact_ticket_rank_vectorized(
+    history: list[DrawRecord],
+    actual_mains: tuple[int, int, int, int, int],
+    actual_stars: tuple[int, int],
+    model_params: dict[str, float] | None = None,
+) -> tuple[float, int]:
+    params = merge_model_params(model_params)
+    history_len = len(history)
+    main_counts, star_counts, delays, main_posterior, star_posterior = _history_arrays(
+        history,
+        params["bayesian_alpha"],
+    )
+    main_components, star_components = _number_score_components(
+        history_len,
+        main_counts,
+        star_counts,
+        delays,
+        main_posterior,
+        star_posterior,
+        params,
+    )
+    main_combos = _main_combinations_array()
+    star_combos = _star_combinations_array()
+    main_scores = main_components[main_combos].sum(axis=1)
+    sorted_main_scores = np.sort(main_scores)
+    star_scores = star_components[star_combos].sum(axis=1)
+    actual_score = float(
+        main_components[np.fromiter(actual_mains, dtype=np.uint8)].sum()
+        + star_components[np.fromiter(actual_stars, dtype=np.uint8)].sum()
+    )
+    thresholds = actual_score - star_scores
+    insertion_points = np.searchsorted(sorted_main_scores, thresholds, side="right")
+    better = int(np.sum(len(sorted_main_scores) - insertion_points, dtype=np.int64))
+    return actual_score, better + 1
+
+
 def exact_ticket_rank(
     history: list[DrawRecord],
     actual_mains: tuple[int, int, int, int, int],
     actual_stars: tuple[int, int],
     model_params: dict[str, float] | None = None,
 ) -> tuple[float, int]:
+    if combinations is _ORIGINAL_COMBINATIONS:
+        return exact_ticket_rank_vectorized(history, actual_mains, actual_stars, model_params)
     params = merge_model_params(model_params)
     freq = compute_frequency_features(history)
     delay = compute_delay_features(history)
