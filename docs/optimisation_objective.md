@@ -51,6 +51,17 @@ prediction set:
 python -m euromillions.cli optimise --objective top-k --top 3
 ```
 
+Exact-rank runs can use validation early stopping:
+
+```powershell
+python -m euromillions.cli optimise --objective exact-rank --early-stop-patience 1 --early-stop-validation-rounds 10
+```
+
+This does not stop on the final holdout. It reserves a validation slice before
+the final holdout, checks average exact rank after each completed trial, and
+stops when validation rank does not improve for the configured patience. The
+final holdout remains a last unbiased check.
+
 Do not use Top-1000 prediction output as the main optimiser objective. It mostly
 optimises the expensive "best hit among 1000 generated tickets" surface and
 candidate/diversity settings, which is a different question from ranking the

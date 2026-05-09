@@ -95,6 +95,13 @@ def suggest_model_params(
     return params
 
 
+def _model_params_from_study_params(params: dict[str, Any]) -> dict[str, float]:
+    return {
+        key: float(params.get(key, default))
+        for key, default in DEFAULT_MODEL_PARAMS.items()
+    }
+
+
 def optimise_weights(
     draws: list[DrawRecord],
     trials: int = 50,
@@ -106,21 +113,33 @@ def optimise_weights(
     timeout_seconds: int | None = None,
     evaluation_mode: Literal["fast", "full"] = "fast",
     holdout_fraction: float = 0.2,
+    validation_fraction: float = 0.2,
+    early_stop_patience: int | None = None,
+    early_stop_min_delta: float = 0.0,
+    early_stop_validation_rounds: int | None = 10,
     log_path: Path | None = None,
     metadata: dict[str, Any] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     if not 0.0 < holdout_fraction < 0.5:
         raise ValueError("holdout_fraction must be between 0 and 0.5")
+    if not 0.0 < validation_fraction < 0.5:
+        raise ValueError("validation_fraction must be between 0 and 0.5")
+    if early_stop_patience is not None and early_stop_patience < 1:
+        raise ValueError("early_stop_patience must be at least 1")
     Path("outputs").mkdir(parents=True, exist_ok=True)
     _ensure_sqlite_storage_dir(storage)
     logger = _optimise_logger(log_path)
     split_idx = max(1, int(len(draws) * (1.0 - holdout_fraction)))
-    train_draws = draws[:split_idx]
+    validation_enabled = objective_name == "exact-rank" and early_stop_patience is not None
+    validation_start_idx = (
+        max(1, int(split_idx * (1.0 - validation_fraction))) if validation_enabled else split_idx
+    )
+    train_draws = draws[:validation_start_idx]
     holdout_draws = draws
 
     logger.info(
-        "starting optimisation study=%s storage=%s trials=%s n_jobs=%s timeout_seconds=%s mode=%s objective=%s draws=%s",
+        "starting optimisation study=%s storage=%s trials=%s n_jobs=%s timeout_seconds=%s mode=%s objective=%s draws=%s validation_enabled=%s",
         study_name,
         storage,
         trials,
@@ -129,6 +148,7 @@ def optimise_weights(
         evaluation_mode,
         objective_name,
         len(draws),
+        validation_enabled,
     )
 
     def objective(trial: optuna.Trial) -> float:
@@ -192,8 +212,55 @@ def optimise_weights(
 
     existing_trials = len(study.trials)
     logger.info("loaded study=%s existing_trials=%s", study.study_name, existing_trials)
+    early_stop_state: dict[str, float | int | bool | None] = {
+        "best_validation_rank": None,
+        "best_trial": None,
+        "stale_trials": 0,
+        "stopped": False,
+    }
 
     def on_trial_complete(study: optuna.Study, trial: FrozenTrial) -> None:
+        if validation_enabled and trial.state == optuna.trial.TrialState.COMPLETE:
+            min_training = int(trial.params.get("min_training_draws", 200))
+            model_params = _model_params_from_study_params(trial.params)
+            _, validation_summary = rank_historical_winners(
+                draws,
+                min_training_draws=min_training,
+                mode=evaluation_mode,
+                thresholds=DEFAULT_THRESHOLDS,
+                model_params=model_params,
+                max_rounds=early_stop_validation_rounds,
+                start_index=validation_start_idx,
+                end_index=split_idx,
+            )
+            validation_rank = float(validation_summary.get("average_rank", float("inf")))
+            best_rank = early_stop_state["best_validation_rank"]
+            improved = best_rank is None or validation_rank < float(best_rank) - early_stop_min_delta
+            if improved:
+                early_stop_state["best_validation_rank"] = validation_rank
+                early_stop_state["best_trial"] = trial.number
+                early_stop_state["stale_trials"] = 0
+            else:
+                early_stop_state["stale_trials"] = int(early_stop_state["stale_trials"] or 0) + 1
+            study.set_user_attr("early_stop_best_validation_rank", early_stop_state["best_validation_rank"])
+            study.set_user_attr("early_stop_best_trial", early_stop_state["best_trial"])
+            study.set_user_attr("early_stop_stale_trials", early_stop_state["stale_trials"])
+            logger.info(
+                "trial %s validation average_rank=%.6f best_validation_rank=%s stale_trials=%s",
+                trial.number,
+                validation_rank,
+                early_stop_state["best_validation_rank"],
+                early_stop_state["stale_trials"],
+            )
+            if int(early_stop_state["stale_trials"] or 0) >= int(early_stop_patience or 1):
+                early_stop_state["stopped"] = True
+                study.set_user_attr("early_stop_stopped", True)
+                logger.info(
+                    "early stopping triggered stale_trials=%s patience=%s",
+                    early_stop_state["stale_trials"],
+                    early_stop_patience,
+                )
+                study.stop()
         message = (
             f"completed trial={trial.number} state={trial.state.name} "
             f"value={trial.value} total_trials={len(study.trials)} best_value={study.best_value}"
@@ -212,10 +279,7 @@ def optimise_weights(
 
     best_min_training = int(study.best_params.get("min_training_draws", 200))
     best_seed = int(study.best_params.get("random_seed", 42))
-    best_model_params = {
-        key: float(study.best_params.get(key, default))
-        for key, default in DEFAULT_MODEL_PARAMS.items()
-    }
+    best_model_params = _model_params_from_study_params(study.best_params)
     if objective_name == "exact-rank":
         _holdout_rows, holdout_summary = rank_historical_winners(
             holdout_draws,
@@ -280,6 +344,17 @@ def optimise_weights(
         "mode": evaluation_mode,
         "metadata": metadata or {},
         "log_path": str(log_path) if log_path is not None else None,
+        "early_stop": {
+            "enabled": validation_enabled,
+            "patience": early_stop_patience,
+            "min_delta": early_stop_min_delta,
+            "validation_fraction": validation_fraction,
+            "validation_rounds": early_stop_validation_rounds,
+            "best_validation_rank": early_stop_state["best_validation_rank"],
+            "best_trial": early_stop_state["best_trial"],
+            "stale_trials": early_stop_state["stale_trials"],
+            "stopped": early_stop_state["stopped"],
+        },
         "holdout": holdout_payload,
     }
     Path("outputs/optimisation_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

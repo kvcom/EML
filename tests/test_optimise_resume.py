@@ -106,3 +106,65 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
     assert "max_main_overlap" not in report["best_params"]
     assert "weighted_freq_weight" in report["best_params"]
     assert seen_start_indexes[-1] is not None
+
+
+def test_exact_rank_early_stopping_uses_validation_not_holdout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "early_stop.sqlite"
+    storage = f"sqlite:///{db.as_posix()}"
+    draws = _synthetic_draws()
+    validation_ranks = iter([100.0, 110.0])
+    validation_calls = 0
+    holdout_calls = 0
+
+    def fake_rank_historical_winners(
+        draws,
+        min_training_draws,
+        mode="fast",
+        thresholds=(1, 3, 10, 100, 500, 1000, 3000),
+        model_params=None,
+        max_rounds=None,
+        start_index=None,
+        end_index=None,
+    ):
+        nonlocal validation_calls, holdout_calls
+        _ = draws, min_training_draws, mode, thresholds, model_params
+        average_rank = 50.0
+        if start_index is not None and end_index is not None:
+            validation_calls += 1
+            average_rank = next(validation_ranks)
+        elif start_index is not None:
+            holdout_calls += 1
+            average_rank = 120.0
+        summary = {
+            "mode": "fast",
+            "evaluated_draws": max_rounds or 2,
+            "evaluation_stride": 10,
+            "total_ticket_count": 139_838_160,
+            "random_expected_top_1000_rate": 1000 / 139_838_160,
+            "average_rank": average_rank,
+            "median_rank": average_rank,
+        }
+        return [], summary
+
+    monkeypatch.setattr("euromillions.optimise.rank_historical_winners", fake_rank_historical_winners)
+
+    report = optimise_weights(
+        draws,
+        trials=3,
+        objective_name="exact-rank",
+        study_name="early_stop_test",
+        storage=storage,
+        evaluation_mode="fast",
+        early_stop_patience=1,
+        early_stop_validation_rounds=1,
+    )
+
+    assert report["completed_trials"] == 2
+    assert report["early_stop"]["stopped"] is True
+    assert report["early_stop"]["best_validation_rank"] == 100.0
+    assert report["early_stop"]["stale_trials"] == 1
+    assert validation_calls == 2
+    assert holdout_calls == 1

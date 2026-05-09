@@ -144,6 +144,9 @@ def optimise(
     n_jobs: int = typer.Option(1, "--n-jobs"),
     timeout_seconds: int | None = typer.Option(None, "--timeout-seconds"),
     mode: Literal["fast", "full"] = typer.Option("fast", "--mode", "--evaluation-mode"),
+    early_stop_patience: int | None = typer.Option(None, "--early-stop-patience"),
+    early_stop_min_delta: float = typer.Option(0.0, "--early-stop-min-delta"),
+    early_stop_validation_rounds: int | None = typer.Option(10, "--early-stop-validation-rounds"),
 ) -> None:
     started_at = _utc_now()
     engine = _engine()
@@ -171,6 +174,9 @@ def optimise(
         timeout_seconds=timeout_seconds,
         evaluation_mode=mode,
         holdout_fraction=load_config().optimisation.holdout_fraction,
+        early_stop_patience=early_stop_patience,
+        early_stop_min_delta=early_stop_min_delta,
+        early_stop_validation_rounds=early_stop_validation_rounds,
         log_path=log_path,
         metadata=metadata,
         progress_callback=typer.echo,
@@ -187,6 +193,7 @@ def optimise(
     typer.echo(f"completed_trials={report['completed_trials']}")
     typer.echo(f"mode={report['mode']}")
     typer.echo(f"objective={report['objective']}")
+    typer.echo("early_stop=" + json.dumps(report["early_stop"]))
     typer.echo("metadata=" + json.dumps(report["metadata"]))
     if objective == "exact-rank":
         typer.echo(
