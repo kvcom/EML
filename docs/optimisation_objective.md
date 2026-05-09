@@ -62,6 +62,27 @@ the final holdout, checks average exact rank after each completed trial, and
 stops when validation rank does not improve for the configured patience. The
 final holdout remains a last unbiased check.
 
+Exact-rank runs can also optimise against multiple rolling pre-holdout windows:
+
+```powershell
+python -m euromillions.cli optimise --objective exact-rank --rolling-windows 5 --rolling-window-rounds 10
+```
+
+With `--rolling-windows` above 1, each trial is scored by the mean exact-rank
+average across the requested windows before the validation/holdout boundary.
+This makes the objective less dependent on one favourable historical slice.
+The final holdout is still kept separate.
+
+After an exact-rank run, the optimiser evaluates the top completed trials by
+objective value on the final holdout and writes:
+
+```text
+outputs/top_trial_holdout_report.json
+```
+
+That report is sorted by holdout average rank, so the best study trial and the
+best holdout trial can be compared directly.
+
 ## Long-run monitoring
 
 Every optimisation writes lightweight monitor files:

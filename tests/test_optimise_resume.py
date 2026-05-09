@@ -102,6 +102,7 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
         log_path=log_path,
         progress_path=tmp_path / "progress.json",
         trials_path=tmp_path / "trials.csv",
+        top_trial_holdout_count=0,
     )
 
     assert report["objective"] == "exact-rank"
@@ -173,6 +174,7 @@ def test_exact_rank_early_stopping_uses_validation_not_holdout(
         evaluation_mode="fast",
         early_stop_patience=1,
         early_stop_validation_rounds=1,
+        top_trial_holdout_count=0,
     )
 
     assert report["completed_trials"] == 2
@@ -181,3 +183,113 @@ def test_exact_rank_early_stopping_uses_validation_not_holdout(
     assert report["early_stop"]["stale_trials"] == 1
     assert validation_calls == 2
     assert holdout_calls == 1
+
+
+def test_exact_rank_reports_top_trials_by_holdout(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "top_trials.sqlite"
+    storage = f"sqlite:///{db.as_posix()}"
+    draws = _synthetic_draws()
+
+    def fake_rank_historical_winners(
+        draws,
+        min_training_draws,
+        mode="fast",
+        thresholds=(1, 3, 10, 100, 500, 1000, 3000),
+        model_params=None,
+        max_rounds=None,
+        start_index=None,
+        end_index=None,
+        rank_backend="auto",
+    ):
+        _ = draws, mode, thresholds, model_params, max_rounds, end_index, rank_backend
+        if start_index is None or start_index < 200:
+            average_rank = float(400 - min_training_draws)
+        else:
+            average_rank = float(min_training_draws)
+        summary = {
+            "mode": "fast",
+            "evaluated_draws": 2,
+            "evaluation_stride": 10,
+            "total_ticket_count": 139_838_160,
+            "random_expected_top_1000_rate": 1000 / 139_838_160,
+            "average_rank": average_rank,
+            "median_rank": average_rank,
+        }
+        return [], summary
+
+    monkeypatch.setattr("euromillions.optimise.rank_historical_winners", fake_rank_historical_winners)
+
+    report = optimise_weights(
+        draws,
+        trials=3,
+        objective_name="exact-rank",
+        study_name="top_trial_test",
+        storage=storage,
+        evaluation_mode="fast",
+        top_trial_holdout_count=3,
+    )
+
+    top_trials = report["top_trial_holdout"]["trials"]
+    assert 1 <= len(top_trials) <= 3
+    holdout_ranks = [row["holdout_average_rank"] for row in top_trials]
+    assert holdout_ranks == sorted(holdout_ranks)
+    report_path = Path("outputs/top_trial_holdout_report.json")
+    assert report_path.exists()
+
+
+def test_exact_rank_rolling_objective_uses_multiple_windows(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "rolling.sqlite"
+    storage = f"sqlite:///{db.as_posix()}"
+    draws = _synthetic_draws()
+    objective_ranges: list[tuple[int | None, int | None, int | None]] = []
+
+    def fake_rank_historical_winners(
+        draws,
+        min_training_draws,
+        mode="fast",
+        thresholds=(1, 3, 10, 100, 500, 1000, 3000),
+        model_params=None,
+        max_rounds=None,
+        start_index=None,
+        end_index=None,
+        rank_backend="auto",
+    ):
+        _ = draws, min_training_draws, mode, thresholds, model_params, rank_backend
+        if end_index is not None:
+            objective_ranges.append((start_index, end_index, max_rounds))
+        average_rank = float(start_index or 100)
+        summary = {
+            "mode": "fast",
+            "evaluated_draws": max_rounds or 2,
+            "evaluation_stride": 10,
+            "total_ticket_count": 139_838_160,
+            "random_expected_top_1000_rate": 1000 / 139_838_160,
+            "average_rank": average_rank,
+            "median_rank": average_rank,
+        }
+        return [], summary
+
+    monkeypatch.setattr("euromillions.optimise.rank_historical_winners", fake_rank_historical_winners)
+
+    report = optimise_weights(
+        draws,
+        trials=1,
+        objective_name="exact-rank",
+        study_name="rolling_test",
+        storage=storage,
+        evaluation_mode="fast",
+        rolling_windows=3,
+        rolling_window_rounds=1,
+        top_trial_holdout_count=0,
+    )
+
+    assert report["rolling_objective"]["enabled"] is True
+    assert report["rolling_objective"]["windows"] == 3
+    assert len(objective_ranges) == 3
+    assert {max_rounds for _, _, max_rounds in objective_ranges} == {1}

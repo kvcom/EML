@@ -20,6 +20,45 @@ from euromillions.rank_history import DEFAULT_THRESHOLDS, RankBackend, rank_hist
 OptimisationObjective = Literal["top-k", "exact-rank"]
 
 
+def _complete_trials_by_value(study: optuna.Study, limit: int) -> list[FrozenTrial]:
+    complete_trials = [
+        trial
+        for trial in study.trials
+        if trial.state == optuna.trial.TrialState.COMPLETE and trial.value is not None
+    ]
+    return sorted(complete_trials, key=lambda trial: float(trial.value or float("-inf")), reverse=True)[
+        :limit
+    ]
+
+
+def _rolling_window_ranges(
+    *,
+    total_draws: int,
+    holdout_start_idx: int,
+    min_training_draws: int,
+    window_count: int,
+    window_rounds: int | None,
+    mode: Literal["fast", "full"],
+) -> list[tuple[int, int]]:
+    if window_count < 1:
+        raise ValueError("rolling_window_count must be at least 1")
+    if window_count == 1:
+        return [(min_training_draws, holdout_start_idx)]
+
+    stride = 10 if mode == "fast" else 1
+    rounds_per_window = window_rounds or 10
+    window_span = max(stride, rounds_per_window * stride)
+    latest_end = min(holdout_start_idx, total_draws)
+    earliest_start = max(min_training_draws, latest_end - (window_span * window_count))
+    ranges: list[tuple[int, int]] = []
+    for idx in range(window_count):
+        start = earliest_start + idx * window_span
+        end = min(start + window_span, latest_end)
+        if start < end:
+            ranges.append((start, end))
+    return ranges
+
+
 def recommended_trials(draw_count: int) -> int:
     if draw_count <= 0:
         return 200
@@ -259,6 +298,10 @@ def optimise_weights(
     early_stop_patience: int | None = None,
     early_stop_min_delta: float = 0.0,
     early_stop_validation_rounds: int | None = 10,
+    rolling_windows: int = 1,
+    rolling_window_rounds: int | None = 10,
+    top_trial_holdout_count: int = 10,
+    top_trial_holdout_rounds: int | None = None,
     rank_backend: RankBackend = "auto",
     log_path: Path | None = None,
     progress_path: Path | None = None,
@@ -272,6 +315,10 @@ def optimise_weights(
         raise ValueError("validation_fraction must be between 0 and 0.5")
     if early_stop_patience is not None and early_stop_patience < 1:
         raise ValueError("early_stop_patience must be at least 1")
+    if rolling_windows < 1:
+        raise ValueError("rolling_windows must be at least 1")
+    if top_trial_holdout_count < 0:
+        raise ValueError("top_trial_holdout_count must be at least 0")
     Path("outputs").mkdir(parents=True, exist_ok=True)
     _ensure_sqlite_storage_dir(storage)
     logger = _optimise_logger(log_path)
@@ -312,24 +359,71 @@ def optimise_weights(
             json.dumps(model_params, sort_keys=True),
         )
         if objective_name == "exact-rank":
-            rows, summary = rank_historical_winners(
-                train_draws,
-                min_training_draws=min_training,
-                mode=evaluation_mode,
-                thresholds=DEFAULT_THRESHOLDS,
-                model_params=model_params,
-                rank_backend=rank_backend,
+            objective_ranges = (
+                _rolling_window_ranges(
+                    total_draws=len(draws),
+                    holdout_start_idx=validation_start_idx,
+                    min_training_draws=min_training,
+                    window_count=rolling_windows,
+                    window_rounds=rolling_window_rounds,
+                    mode=evaluation_mode,
+                )
+                if rolling_windows > 1
+                else []
             )
-            average_rank = float(summary.get("average_rank", 0.0))
-            median_rank = float(summary.get("median_rank", 0.0))
+            window_summaries: list[dict[str, float | int | str]] = []
+            average_ranks: list[float] = []
+            median_ranks: list[float] = []
+            evaluated_draws = 0
+            if rolling_windows == 1:
+                rows, summary = rank_historical_winners(
+                    train_draws,
+                    min_training_draws=min_training,
+                    mode=evaluation_mode,
+                    thresholds=DEFAULT_THRESHOLDS,
+                    model_params=model_params,
+                    rank_backend=rank_backend,
+                )
+                if "average_rank" in summary:
+                    average_ranks.append(float(summary["average_rank"]))
+                if "median_rank" in summary:
+                    median_ranks.append(float(summary["median_rank"]))
+                evaluated_draws += len(rows)
+                window_summaries.append(summary)
+            else:
+                for start_idx, end_idx in objective_ranges:
+                    rows, summary = rank_historical_winners(
+                        draws,
+                        min_training_draws=min_training,
+                        mode=evaluation_mode,
+                        thresholds=DEFAULT_THRESHOLDS,
+                        model_params=model_params,
+                        max_rounds=rolling_window_rounds,
+                        start_index=start_idx,
+                        end_index=end_idx,
+                        rank_backend=rank_backend,
+                    )
+                    if "average_rank" in summary:
+                        average_ranks.append(float(summary["average_rank"]))
+                    if "median_rank" in summary:
+                        median_ranks.append(float(summary["median_rank"]))
+                    evaluated_draws += len(rows)
+                    window_summaries.append(summary)
+            average_rank = sum(average_ranks) / len(average_ranks) if average_ranks else float("inf")
+            median_rank = sum(median_ranks) / len(median_ranks) if median_ranks else float("inf")
             value = -average_rank
+            trial.set_user_attr("objective_average_rank", average_rank)
+            trial.set_user_attr("objective_median_rank", median_rank)
+            trial.set_user_attr("objective_evaluated_draws", evaluated_draws)
+            trial.set_user_attr("objective_window_count", len(window_summaries))
             logger.info(
-                "trial %s finished exact_rank_value=%.6f average_rank=%.6f median_rank=%.6f rounds=%s",
+                "trial %s finished exact_rank_value=%.6f average_rank=%.6f median_rank=%.6f rounds=%s windows=%s",
                 trial.number,
                 value,
                 average_rank,
                 median_rank,
-                len(rows),
+                evaluated_draws,
+                len(window_summaries),
             )
             return value
         result = run_walk_forward(
@@ -440,6 +534,7 @@ def optimise_weights(
     best_min_training = int(study.best_params.get("min_training_draws", 200))
     best_seed = int(study.best_params.get("random_seed", 42))
     best_model_params = _model_params_from_study_params(study.best_params)
+    top_trial_report: list[dict[str, Any]] = []
     if objective_name == "exact-rank":
         _holdout_rows, holdout_summary = rank_historical_winners(
             holdout_draws,
@@ -459,6 +554,57 @@ def optimise_weights(
             holdout_summary["evaluated_draws"],
             holdout_summary.get("average_rank"),
             holdout_summary.get("median_rank"),
+        )
+        for candidate in _complete_trials_by_value(study, top_trial_holdout_count):
+            candidate_min_training = int(candidate.params.get("min_training_draws", 200))
+            candidate_model_params = _model_params_from_study_params(candidate.params)
+            validation_summary: dict[str, float | int | str] | None = None
+            if validation_enabled:
+                _, validation_summary = rank_historical_winners(
+                    draws,
+                    min_training_draws=candidate_min_training,
+                    mode=evaluation_mode,
+                    thresholds=DEFAULT_THRESHOLDS,
+                    model_params=candidate_model_params,
+                    max_rounds=early_stop_validation_rounds,
+                    start_index=validation_start_idx,
+                    end_index=split_idx,
+                    rank_backend=rank_backend,
+                )
+            _, candidate_holdout_summary = rank_historical_winners(
+                holdout_draws,
+                min_training_draws=candidate_min_training,
+                mode=evaluation_mode,
+                thresholds=DEFAULT_THRESHOLDS,
+                model_params=candidate_model_params,
+                max_rounds=top_trial_holdout_rounds,
+                start_index=split_idx,
+                rank_backend=rank_backend,
+            )
+            top_trial_report.append(
+                {
+                    "trial": candidate.number,
+                    "objective_value": float(candidate.value or 0.0),
+                    "objective_average_rank": float(candidate.user_attrs.get("objective_average_rank", -float(candidate.value or 0.0))),
+                    "validation_average_rank": (
+                        float(validation_summary["average_rank"])
+                        if validation_summary is not None and "average_rank" in validation_summary
+                        else None
+                    ),
+                    "holdout_average_rank": candidate_holdout_summary.get("average_rank"),
+                    "holdout_median_rank": candidate_holdout_summary.get("median_rank"),
+                    "holdout_evaluated_draws": candidate_holdout_summary["evaluated_draws"],
+                    "params": {k: float(v) for k, v in candidate.params.items()},
+                }
+            )
+        top_trial_report.sort(
+            key=lambda row: float(row["holdout_average_rank"])
+            if row["holdout_average_rank"] is not None
+            else float("inf")
+        )
+        _atomic_write_json(
+            Path("outputs/top_trial_holdout_report.json"),
+            {"trials": top_trial_report},
         )
     else:
         holdout_result = run_walk_forward(
@@ -518,6 +664,17 @@ def optimise_weights(
             "best_trial": early_stop_state["best_trial"],
             "stale_trials": early_stop_state["stale_trials"],
             "stopped": early_stop_state["stopped"],
+        },
+        "rolling_objective": {
+            "enabled": objective_name == "exact-rank" and rolling_windows > 1,
+            "windows": rolling_windows,
+            "rounds_per_window": rolling_window_rounds,
+        },
+        "top_trial_holdout": {
+            "count": top_trial_holdout_count,
+            "rounds": top_trial_holdout_rounds,
+            "report_path": "outputs/top_trial_holdout_report.json" if objective_name == "exact-rank" else None,
+            "trials": top_trial_report,
         },
         "holdout": holdout_payload,
     }

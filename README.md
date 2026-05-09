@@ -16,6 +16,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `python -m euromillions.cli smoke-test`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --timeout-seconds 21600 --objective exact-rank`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --objective exact-rank --early-stop-patience 1 --early-stop-validation-rounds 10`
+- `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --objective exact-rank --rolling-windows 5 --rolling-window-rounds 10 --top-trial-holdout-count 10`
 - `python -m euromillions.cli optimise --objective exact-rank --rank-backend auto`
 - `python -m euromillions.cli predict --top 3`
 - `python -m euromillions.cli rank-history --mode fast --thresholds 1,3,10,100,500,1000,3000`
@@ -44,6 +45,7 @@ Long optimisation runs write live monitor files:
 
 - `outputs/optimisation_progress.json`: current status, active trial, best value, and rough remaining-time estimate.
 - `outputs/optimisation_trials.csv`: one row per completed trial.
+- `outputs/top_trial_holdout_report.json`: exact-rank comparison of the top completed trials ranked by final holdout average rank.
 
 GPU acceleration is optional. Install it on CUDA-capable machines with:
 

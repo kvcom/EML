@@ -24,11 +24,12 @@ class EuroMillionsComSource:
             except ValueError:
                 continue
         text = soup.get_text(" ", strip=True)
-        match = re.search(r"\b(\d{1,2}\s+[A-Za-z]+\s+\d{4})\b", text)
+        match = re.search(r"\b(\d{1,2})\s*(?:st|nd|rd|th)?\s+([A-Za-z]+)\s+(\d{4})\b", text)
         if match is None:
             return None
         try:
-            return datetime.strptime(match.group(1), "%d %B %Y").date()
+            day, month, year = match.groups()
+            return datetime.strptime(f"{day} {month} {year}", "%d %B %Y").date()
         except ValueError:
             return None
 
@@ -42,7 +43,16 @@ class EuroMillionsComSource:
         parsed_date = self._parse_draw_date(soup)
         if parsed_date is None:
             return []
-        nums = [int(n.text) for n in soup.select(".balls .ball, .numbers .ball") if n.text.isdigit()]
+        nums: list[int] = []
+        for ball_list in soup.select("ul.balls"):
+            candidate = [
+                int(n.text)
+                for n in ball_list.select(".ball, .lucky-star")
+                if n.text.strip().isdigit()
+            ]
+            if len(candidate) >= 7:
+                nums = candidate[:7]
+                break
         if len(nums) < 7:
             return []
         mains = tuple(sorted(nums[:5]))

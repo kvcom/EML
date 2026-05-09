@@ -147,6 +147,10 @@ def optimise(
     early_stop_patience: int | None = typer.Option(None, "--early-stop-patience"),
     early_stop_min_delta: float = typer.Option(0.0, "--early-stop-min-delta"),
     early_stop_validation_rounds: int | None = typer.Option(10, "--early-stop-validation-rounds"),
+    rolling_windows: int = typer.Option(1, "--rolling-windows"),
+    rolling_window_rounds: int | None = typer.Option(10, "--rolling-window-rounds"),
+    top_trial_holdout_count: int = typer.Option(10, "--top-trial-holdout-count"),
+    top_trial_holdout_rounds: int | None = typer.Option(None, "--top-trial-holdout-rounds"),
     rank_backend: RankBackend = typer.Option("auto", "--rank-backend"),
 ) -> None:
     started_at = _utc_now()
@@ -178,6 +182,10 @@ def optimise(
         early_stop_patience=early_stop_patience,
         early_stop_min_delta=early_stop_min_delta,
         early_stop_validation_rounds=early_stop_validation_rounds,
+        rolling_windows=rolling_windows,
+        rolling_window_rounds=rolling_window_rounds,
+        top_trial_holdout_count=top_trial_holdout_count,
+        top_trial_holdout_rounds=top_trial_holdout_rounds,
         rank_backend=rank_backend,
         log_path=log_path,
         metadata=metadata,
@@ -198,6 +206,8 @@ def optimise(
     typer.echo(f"progress_path={report['progress_path']}")
     typer.echo(f"trials_path={report['trials_path']}")
     typer.echo("early_stop=" + json.dumps(report["early_stop"]))
+    typer.echo("rolling_objective=" + json.dumps(report["rolling_objective"]))
+    typer.echo("top_trial_holdout=" + json.dumps(report["top_trial_holdout"]))
     typer.echo("metadata=" + json.dumps(report["metadata"]))
     if objective == "exact-rank":
         typer.echo(
