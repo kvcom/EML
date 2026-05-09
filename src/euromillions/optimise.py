@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
+from uuid import uuid4
 from typing import Any, Callable, Literal
 
 import optuna
@@ -107,9 +108,13 @@ def _model_params_from_study_params(params: dict[str, Any]) -> dict[str, float]:
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path = path.with_suffix(path.suffix + f".{uuid4().hex}.tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    tmp_path.replace(path)
+    try:
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 class OptimisationMonitor:
@@ -183,7 +188,10 @@ class OptimisationMonitor:
         }
 
     def write(self, status: str) -> None:
-        _atomic_write_json(self.progress_path, self._payload(status))
+        try:
+            _atomic_write_json(self.progress_path, self._payload(status))
+        except OSError:
+            return
 
     def trial_started(self, trial_number: int, started_at: str) -> None:
         self.current_trial_number = trial_number
@@ -201,32 +209,35 @@ class OptimisationMonitor:
         self.total_completed_trials = len(study.trials)
         self.best_value = float(study.best_value)
         self.best_trial = study.best_trial.number
-        with self.trials_path.open("a", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(
-                fh,
-                fieldnames=[
-                    "trial",
-                    "state",
-                    "value",
-                    "best_value",
-                    "duration_seconds",
-                    "completed_new_trials",
-                    "total_completed_trials",
-                    "params_json",
-                ],
-            )
-            writer.writerow(
-                {
-                    "trial": trial.number,
-                    "state": trial.state.name,
-                    "value": trial.value,
-                    "best_value": self.best_value,
-                    "duration_seconds": self.last_trial_seconds,
-                    "completed_new_trials": self.completed_new_trials,
-                    "total_completed_trials": self.total_completed_trials,
-                    "params_json": json.dumps(dict(trial.params), sort_keys=True),
-                }
-            )
+        try:
+            with self.trials_path.open("a", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(
+                    fh,
+                    fieldnames=[
+                        "trial",
+                        "state",
+                        "value",
+                        "best_value",
+                        "duration_seconds",
+                        "completed_new_trials",
+                        "total_completed_trials",
+                        "params_json",
+                    ],
+                )
+                writer.writerow(
+                    {
+                        "trial": trial.number,
+                        "state": trial.state.name,
+                        "value": trial.value,
+                        "best_value": self.best_value,
+                        "duration_seconds": self.last_trial_seconds,
+                        "completed_new_trials": self.completed_new_trials,
+                        "total_completed_trials": self.total_completed_trials,
+                        "params_json": json.dumps(dict(trial.params), sort_keys=True),
+                    }
+                )
+        except OSError:
+            pass
         self.current_trial_number = None
         self.current_trial_started_at = None
         self.current_trial_timer = None
