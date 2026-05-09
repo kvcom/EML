@@ -19,7 +19,7 @@ from euromillions.ingest_web import reconcile_and_insert
 from euromillions.io import load_draw_records
 from euromillions.optimise import OptimisationObjective, optimise_weights, recommended_trials
 from euromillions.predict import generate_predictions, save_predictions
-from euromillions.rank_history import parse_thresholds, rank_historical_winners, save_rank_history
+from euromillions.rank_history import RankBackend, parse_thresholds, rank_historical_winners, save_rank_history
 from euromillions.schema import draws
 from euromillions.sources.beatlottery import BeatLotterySource
 from euromillions.sources.euro_millions_com import EuroMillionsComSource
@@ -147,6 +147,7 @@ def optimise(
     early_stop_patience: int | None = typer.Option(None, "--early-stop-patience"),
     early_stop_min_delta: float = typer.Option(0.0, "--early-stop-min-delta"),
     early_stop_validation_rounds: int | None = typer.Option(10, "--early-stop-validation-rounds"),
+    rank_backend: RankBackend = typer.Option("auto", "--rank-backend"),
 ) -> None:
     started_at = _utc_now()
     engine = _engine()
@@ -177,6 +178,7 @@ def optimise(
         early_stop_patience=early_stop_patience,
         early_stop_min_delta=early_stop_min_delta,
         early_stop_validation_rounds=early_stop_validation_rounds,
+        rank_backend=rank_backend,
         log_path=log_path,
         metadata=metadata,
         progress_callback=typer.echo,
@@ -311,6 +313,7 @@ def rank_history(
     thresholds: str = typer.Option("1,3,10,100,500,1000,3000", "--thresholds"),
     params_path: str = typer.Option("outputs/best_params.json", "--params-path"),
     max_rounds: int | None = typer.Option(None, "--max-rounds"),
+    rank_backend: RankBackend = typer.Option("auto", "--rank-backend"),
 ) -> None:
     engine = _engine()
     with begin(engine) as conn:
@@ -325,6 +328,7 @@ def rank_history(
         thresholds=parsed_thresholds,
         model_params=model_params,
         max_rounds=max_rounds,
+        rank_backend=rank_backend,
     )
     save_rank_history(rows, summary)
     typer.echo(json.dumps(summary, indent=2))

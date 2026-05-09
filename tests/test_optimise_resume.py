@@ -73,8 +73,9 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
         max_rounds=None,
         start_index=None,
         end_index=None,
+        rank_backend="auto",
     ):
-        _ = draws, min_training_draws, mode, thresholds, model_params, max_rounds, end_index
+        _ = draws, min_training_draws, mode, thresholds, model_params, max_rounds, end_index, rank_backend
         seen_start_indexes.append(start_index)
         summary = {
             "mode": "fast",
@@ -128,9 +129,10 @@ def test_exact_rank_early_stopping_uses_validation_not_holdout(
         max_rounds=None,
         start_index=None,
         end_index=None,
+        rank_backend="auto",
     ):
         nonlocal validation_calls, holdout_calls
-        _ = draws, min_training_draws, mode, thresholds, model_params
+        _ = draws, min_training_draws, mode, thresholds, model_params, rank_backend
         average_rank = 50.0
         if start_index is not None and end_index is not None:
             validation_calls += 1

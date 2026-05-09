@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["mypy", "pytest", "ruff"]
+gpu = ["cupy-cuda12x", "nvidia-cuda-nvrtc-cu12"]
 
 [project.scripts]
 euromillions = "euromillions.cli:app"

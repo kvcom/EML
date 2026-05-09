@@ -82,7 +82,22 @@ Measured after the vectorized backend:
 - `rank-history --mode fast --max-rounds 20`: about 2.1s.
 - `optimise --objective exact-rank --trials 1 --mode fast`: about 9.3s.
 
-Python currently does not have a usable CUDA array runtime in this environment:
-`cupy` and CUDA-enabled `torch` are not installed, and a trivial Numba CUDA
-kernel fails despite the RTX 5080 being visible to `nvidia-smi`. GPU acceleration
-therefore needs a clean CUDA Python runtime before it can be enabled safely.
+The rank backend can be selected with `--rank-backend auto`, `--rank-backend cpu`,
+or `--rank-backend gpu`. `auto` uses the GPU when a usable CuPy/CUDA runtime is
+available and falls back to CPU otherwise, so CPU-only servers remain compatible.
+
+Install optional GPU dependencies on CUDA-capable machines:
+
+```powershell
+python -m pip install ".[gpu]"
+```
+
+Measured on the local RTX 5080 after installing the GPU extra:
+
+- CPU backend, `optimise --objective exact-rank --trials 1`: about 8.8s.
+- GPU backend, `optimise --objective exact-rank --trials 1`: about 7.9s.
+
+The GPU backend keeps exact CPU/GPU rank reproducibility by building the score
+vectors with the same CPU arithmetic and using the GPU for sort/search/count.
+This is a modest speedup because the vectorized CPU backend is already very
+fast, and host-to-device transfer is now a meaningful part of the cost.

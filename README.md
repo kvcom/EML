@@ -16,6 +16,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `python -m euromillions.cli smoke-test`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --timeout-seconds 21600 --objective exact-rank`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --objective exact-rank --early-stop-patience 1 --early-stop-validation-rounds 10`
+- `python -m euromillions.cli optimise --objective exact-rank --rank-backend auto`
 - `python -m euromillions.cli predict --top 3`
 - `python -m euromillions.cli rank-history --mode fast --thresholds 1,3,10,100,500,1000,3000`
 - `python -m euromillions.cli run`
@@ -38,6 +39,14 @@ Use `scripts/bootstrap_hetzner.sh` to prepare a new server, then `scripts/run_op
 Recovery instructions are in `docs/hetzner_runbook.md`.
 
 Optimisation objective guidance is in `docs/optimisation_objective.md`.
+
+GPU acceleration is optional. Install it on CUDA-capable machines with:
+
+```powershell
+python -m pip install ".[gpu]"
+```
+
+CPU-only servers can run the same code without the GPU extra.
 
 ## Data sources
 

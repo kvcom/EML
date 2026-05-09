@@ -3,12 +3,14 @@ from __future__ import annotations
 import bisect
 import csv
 import json
+import os
+import site
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
 from statistics import mean, median
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -19,6 +21,7 @@ from euromillions.scoring import score_main_combination_from_features, score_sta
 TOTAL_TICKETS = 139_838_160
 DEFAULT_THRESHOLDS = (1, 3, 10, 100, 500, 1000, 3000)
 _ORIGINAL_COMBINATIONS = combinations
+RankBackend = Literal["auto", "cpu", "gpu"]
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,86 @@ def _main_combinations_array() -> np.ndarray:
 @lru_cache(maxsize=1)
 def _star_combinations_array() -> np.ndarray:
     return np.array(list(combinations(range(1, 13), 2)), dtype=np.uint8)
+
+
+def _maybe_set_cuda_path() -> None:
+    if os.environ.get("CUDA_PATH"):
+        return
+    candidates = [Path(path) for path in site.getsitepackages()]
+    candidates.extend(Path(path) for path in site.getusersitepackages().split(os.pathsep))
+    for parent in candidates:
+        candidate = parent / "nvidia" / "cuda_nvrtc"
+        if (candidate / "bin").exists():
+            os.environ["CUDA_PATH"] = str(candidate)
+            return
+
+
+@lru_cache(maxsize=1)
+def _cupy() -> Any | None:
+    try:
+        _maybe_set_cuda_path()
+        import cupy as cp
+
+        if cp.cuda.runtime.getDeviceCount() <= 0:
+            return None
+        probe = cp.arange(1, dtype=cp.float32)
+        cp.asnumpy(probe + 1)
+        return cp
+    except Exception:
+        return None
+
+
+def gpu_available() -> bool:
+    return _cupy() is not None
+
+
+def resolve_rank_backend(rank_backend: RankBackend) -> Literal["cpu", "gpu"]:
+    if rank_backend == "cpu":
+        return "cpu"
+    if rank_backend == "gpu":
+        if not gpu_available():
+            raise RuntimeError("rank_backend='gpu' requested, but no usable CuPy/CUDA runtime is available")
+        return "gpu"
+    return "gpu" if gpu_available() else "cpu"
+
+
+@lru_cache(maxsize=1)
+def _main_combinations_gpu() -> Any:
+    cp = _cupy()
+    if cp is None:
+        raise RuntimeError("no usable CuPy/CUDA runtime is available")
+    return cp.asarray(_main_combinations_array())
+
+
+@lru_cache(maxsize=1)
+def _star_combinations_gpu() -> Any:
+    cp = _cupy()
+    if cp is None:
+        raise RuntimeError("no usable CuPy/CUDA runtime is available")
+    return cp.asarray(_star_combinations_array())
+
+
+def _score_vectors_cpu(
+    main_components: np.ndarray,
+    star_components: np.ndarray,
+    actual_mains: tuple[int, int, int, int, int],
+    actual_stars: tuple[int, int],
+) -> tuple[np.ndarray, np.ndarray, float]:
+    main_combos = _main_combinations_array()
+    star_combos = _star_combinations_array()
+    main_scores = (
+        main_components[main_combos[:, 0]]
+        + main_components[main_combos[:, 1]]
+        + main_components[main_combos[:, 2]]
+        + main_components[main_combos[:, 3]]
+        + main_components[main_combos[:, 4]]
+    )
+    star_scores = star_components[star_combos[:, 0]] + star_components[star_combos[:, 1]]
+    actual_score = float(
+        main_components[np.fromiter(actual_mains, dtype=np.uint8)].sum()
+        + star_components[np.fromiter(actual_stars, dtype=np.uint8)].sum()
+    )
+    return main_scores, star_scores, actual_score
 
 
 def _posterior_main_prob(history: list[DrawRecord], alpha: float) -> dict[int, float]:
@@ -177,7 +260,9 @@ def exact_ticket_rank_vectorized(
     actual_mains: tuple[int, int, int, int, int],
     actual_stars: tuple[int, int],
     model_params: dict[str, float] | None = None,
+    rank_backend: RankBackend = "auto",
 ) -> tuple[float, int]:
+    resolved_backend = resolve_rank_backend(rank_backend)
     params = merge_model_params(model_params)
     history_len = len(history)
     main_counts, star_counts, delays, main_posterior, star_posterior = _history_arrays(
@@ -193,19 +278,61 @@ def exact_ticket_rank_vectorized(
         star_posterior,
         params,
     )
-    main_combos = _main_combinations_array()
-    star_combos = _star_combinations_array()
-    main_scores = main_components[main_combos].sum(axis=1)
-    sorted_main_scores = np.sort(main_scores)
-    star_scores = star_components[star_combos].sum(axis=1)
-    actual_score = float(
-        main_components[np.fromiter(actual_mains, dtype=np.uint8)].sum()
-        + star_components[np.fromiter(actual_stars, dtype=np.uint8)].sum()
+    if resolved_backend == "gpu":
+        return _exact_ticket_rank_gpu(
+            main_components,
+            star_components,
+            actual_mains,
+            actual_stars,
+        )
+    return _exact_ticket_rank_cpu(
+        main_components,
+        star_components,
+        actual_mains,
+        actual_stars,
     )
+
+
+def _exact_ticket_rank_cpu(
+    main_components: np.ndarray,
+    star_components: np.ndarray,
+    actual_mains: tuple[int, int, int, int, int],
+    actual_stars: tuple[int, int],
+) -> tuple[float, int]:
+    main_scores, star_scores, actual_score = _score_vectors_cpu(
+        main_components,
+        star_components,
+        actual_mains,
+        actual_stars,
+    )
+    sorted_main_scores = np.sort(main_scores)
     thresholds = actual_score - star_scores
     insertion_points = np.searchsorted(sorted_main_scores, thresholds, side="right")
     better = int(np.sum(len(sorted_main_scores) - insertion_points, dtype=np.int64))
     return actual_score, better + 1
+
+
+def _exact_ticket_rank_gpu(
+    main_components: np.ndarray,
+    star_components: np.ndarray,
+    actual_mains: tuple[int, int, int, int, int],
+    actual_stars: tuple[int, int],
+) -> tuple[float, int]:
+    cp = _cupy()
+    if cp is None:
+        raise RuntimeError("no usable CuPy/CUDA runtime is available")
+    main_scores, star_scores, actual_score = _score_vectors_cpu(
+        main_components,
+        star_components,
+        actual_mains,
+        actual_stars,
+    )
+    sorted_main_scores = cp.sort(cp.asarray(main_scores))
+    thresholds = cp.asarray(actual_score - star_scores)
+    insertion_points = cp.searchsorted(sorted_main_scores, thresholds, side="right")
+    better = cp.sum(len(sorted_main_scores) - insertion_points, dtype=cp.int64)
+    exact_rank = int(cp.asnumpy(better)) + 1
+    return actual_score, exact_rank
 
 
 def exact_ticket_rank(
@@ -213,9 +340,16 @@ def exact_ticket_rank(
     actual_mains: tuple[int, int, int, int, int],
     actual_stars: tuple[int, int],
     model_params: dict[str, float] | None = None,
+    rank_backend: RankBackend = "auto",
 ) -> tuple[float, int]:
     if combinations is _ORIGINAL_COMBINATIONS:
-        return exact_ticket_rank_vectorized(history, actual_mains, actual_stars, model_params)
+        return exact_ticket_rank_vectorized(
+            history,
+            actual_mains,
+            actual_stars,
+            model_params,
+            rank_backend=rank_backend,
+        )
     params = merge_model_params(model_params)
     freq = compute_frequency_features(history)
     delay = compute_delay_features(history)
@@ -258,8 +392,10 @@ def rank_historical_winners(
     max_rounds: int | None = None,
     start_index: int | None = None,
     end_index: int | None = None,
+    rank_backend: RankBackend = "auto",
 ) -> tuple[list[HistoricalRankRow], dict[str, float | int | str]]:
     stride = 10 if mode == "fast" else 1
+    resolved_backend = resolve_rank_backend(rank_backend)
     limit = 250 if max_rounds is None and mode == "fast" else max_rounds
     rows: list[HistoricalRankRow] = []
     start = max(min_training_draws, start_index or min_training_draws)
@@ -269,7 +405,13 @@ def rank_historical_winners(
             break
         actual = draws[idx]
         history = draws[:idx]
-        score, rank = exact_ticket_rank(history, actual.mains, actual.stars, model_params)
+        score, rank = exact_ticket_rank(
+            history,
+            actual.mains,
+            actual.stars,
+            model_params,
+            rank_backend=resolved_backend,
+        )
         rows.append(
             HistoricalRankRow(
                 draw_id=actual.draw_id,
@@ -287,6 +429,7 @@ def rank_historical_winners(
         "mode": mode,
         "evaluated_draws": len(rows),
         "evaluation_stride": stride,
+        "rank_backend": resolved_backend,
         "total_ticket_count": TOTAL_TICKETS,
         "random_expected_top_1000_rate": 1000 / TOTAL_TICKETS,
     }

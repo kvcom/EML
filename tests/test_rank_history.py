@@ -20,8 +20,14 @@ def test_rank_history_uses_only_previous_draws(monkeypatch) -> None:
     ]
     seen_history_lengths: list[int] = []
 
-    def fake_exact_ticket_rank(history, actual_mains, actual_stars, model_params=None):
-        _ = actual_mains, actual_stars, model_params
+    def fake_exact_ticket_rank(
+        history,
+        actual_mains,
+        actual_stars,
+        model_params=None,
+        rank_backend="auto",
+    ):
+        _ = actual_mains, actual_stars, model_params, rank_backend
         seen_history_lengths.append(len(history))
         return 0.5, 42
 

@@ -11,7 +11,7 @@ from optuna.trial import FrozenTrial
 from euromillions.backtest import run_walk_forward
 from euromillions.features import DrawRecord
 from euromillions.model_params import DEFAULT_MODEL_PARAMS
-from euromillions.rank_history import DEFAULT_THRESHOLDS, rank_historical_winners
+from euromillions.rank_history import DEFAULT_THRESHOLDS, RankBackend, rank_historical_winners
 
 OptimisationObjective = Literal["top-k", "exact-rank"]
 
@@ -117,6 +117,7 @@ def optimise_weights(
     early_stop_patience: int | None = None,
     early_stop_min_delta: float = 0.0,
     early_stop_validation_rounds: int | None = 10,
+    rank_backend: RankBackend = "auto",
     log_path: Path | None = None,
     metadata: dict[str, Any] | None = None,
     progress_callback: Callable[[str], None] | None = None,
@@ -172,6 +173,7 @@ def optimise_weights(
                 mode=evaluation_mode,
                 thresholds=DEFAULT_THRESHOLDS,
                 model_params=model_params,
+                rank_backend=rank_backend,
             )
             average_rank = float(summary.get("average_rank", 0.0))
             median_rank = float(summary.get("median_rank", 0.0))
@@ -232,6 +234,7 @@ def optimise_weights(
                 max_rounds=early_stop_validation_rounds,
                 start_index=validation_start_idx,
                 end_index=split_idx,
+                rank_backend=rank_backend,
             )
             validation_rank = float(validation_summary.get("average_rank", float("inf")))
             best_rank = early_stop_state["best_validation_rank"]
@@ -288,6 +291,7 @@ def optimise_weights(
             thresholds=DEFAULT_THRESHOLDS,
             model_params=best_model_params,
             start_index=split_idx,
+            rank_backend=rank_backend,
         )
         holdout_payload: dict[str, float | int | str | bool] = {
             **holdout_summary,
@@ -350,6 +354,7 @@ def optimise_weights(
             "min_delta": early_stop_min_delta,
             "validation_fraction": validation_fraction,
             "validation_rounds": early_stop_validation_rounds,
+            "rank_backend": rank_backend,
             "best_validation_rank": early_stop_state["best_validation_rank"],
             "best_trial": early_stop_state["best_trial"],
             "stale_trials": early_stop_state["stale_trials"],
