@@ -265,11 +265,12 @@ def optimise(
     typer.echo("top_trial_holdout=" + json.dumps(report["top_trial_holdout"]))
     typer.echo("portfolio_objective=" + json.dumps(report["portfolio_objective"]))
     typer.echo("metadata=" + json.dumps(report["metadata"]))
-    if objective == "exact-rank":
+    if objective in {"exact-rank", "exact-rank-sum"}:
         typer.echo(
             "holdout_metrics="
             + json.dumps(
                 {
+                    "rank_sum": report["holdout"].get("rank_sum"),
                     "average_rank": report["holdout"].get("average_rank"),
                     "median_rank": report["holdout"].get("median_rank"),
                     "evaluated_draws": report["holdout"]["evaluated_draws"],

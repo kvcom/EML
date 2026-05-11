@@ -15,6 +15,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `python -m euromillions.cli backtest --top 3`
 - `python -m euromillions.cli smoke-test`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --timeout-seconds 21600 --objective exact-rank`
+- `python -m euromillions.cli optimise --study-name eml_rank_sum --storage sqlite:///outputs/rank_sum_study.sqlite --trials 500 --mode fast --objective exact-rank-sum --rolling-windows 5 --rolling-window-rounds 10`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --objective exact-rank --early-stop-patience 1 --early-stop-validation-rounds 10`
 - `python -m euromillions.cli optimise --study-name eml_main --storage sqlite:///outputs/optuna_study.sqlite --trials 500 --mode fast --objective exact-rank --rolling-windows 5 --rolling-window-rounds 10 --top-trial-holdout-count 10`
 - `python -m euromillions.cli optimise --study-name eml_portfolio --storage sqlite:///outputs/portfolio_uplift_study.sqlite --trials 100 --mode fast --objective portfolio-uplift --top 3 --portfolio-objective-rounds 100 --portfolio-random-baseline-runs 10`
@@ -31,7 +32,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `update-results`: fetches latest observations from configured public sources and inserts safe reconciled updates.
 - `backtest`: runs walk-forward evaluation with no data leakage and random baseline comparison.
 - `smoke-test`: validates the local environment, database, one fast walk-forward round, and one prediction before expensive runs.
-- `optimise`: resumes or creates a persistent Optuna study, logs progress to `logs/`, records run metadata, and reports holdout performance. The default objective is exact full-ticket historical rank; use `--objective portfolio-uplift --top 3` to optimise practical prize-tier portfolio winning-rate uplift, or `--objective top-k --top 3` for the older Top-K hit objective. Exact-rank runs can stop automatically with validation early stopping via `--early-stop-patience`.
+- `optimise`: resumes or creates a persistent Optuna study, logs progress to `logs/`, records run metadata, and reports holdout performance. The default objective is exact full-ticket historical rank; use `--objective exact-rank-sum` to minimise the total rank sum directly, `--objective portfolio-uplift --top 3` to optimise practical prize-tier portfolio winning-rate uplift, or `--objective top-k --top 3` for the older Top-K hit objective. Exact-rank runs can stop automatically with validation early stopping via `--early-stop-patience`.
 - `validate-candidates`: compares parameter files or Optuna trial IDs across multiple validation windows and the final holdout, then writes a promotion report.
 - `portfolio-backtest`: evaluates a generated ticket portfolio against historical prize-tier outcomes and a random portfolio baseline.
 - `predict`: updates data, refreshes features incrementally, and outputs top-N ranked predictions to terminal/JSON/CSV.

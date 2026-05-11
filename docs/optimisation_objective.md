@@ -40,6 +40,18 @@ python -m euromillions.cli optimise --objective exact-rank
 This objective preserves exact rank semantics and maximises negative average
 rank, so lower historical winner ranks are better.
 
+When the promotion target is explicitly the sum of ranks, use:
+
+```powershell
+python -m euromillions.cli optimise --objective exact-rank-sum --rolling-windows 5 --rolling-window-rounds 10
+```
+
+This maximises negative `rank_sum`, where `rank_sum` is the total exact rank
+across all evaluated historical winner draws. If every trial evaluates the same
+number of draws, minimising average rank and minimising rank sum are equivalent;
+`exact-rank-sum` keeps the target explicit and avoids window-average weighting
+surprises.
+
 Only scoring parameters are sampled for exact-rank optimisation. Prediction
 output parameters such as candidate-pool size and diversity constraints are
 left at defaults because they do not affect full-ticket score ranking.

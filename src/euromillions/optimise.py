@@ -18,7 +18,7 @@ from euromillions.model_params import DEFAULT_MODEL_PARAMS
 from euromillions.portfolio_backtest import run_portfolio_backtest
 from euromillions.rank_history import DEFAULT_THRESHOLDS, RankBackend, rank_historical_winners
 
-OptimisationObjective = Literal["top-k", "exact-rank", "portfolio-uplift"]
+OptimisationObjective = Literal["top-k", "exact-rank", "exact-rank-sum", "portfolio-uplift"]
 
 
 def _complete_trials_by_value(study: optuna.Study, limit: int) -> list[FrozenTrial]:
@@ -331,7 +331,8 @@ def optimise_weights(
     _ensure_sqlite_storage_dir(storage)
     logger = _optimise_logger(log_path)
     split_idx = max(1, int(len(draws) * (1.0 - holdout_fraction)))
-    validation_enabled = objective_name == "exact-rank" and early_stop_patience is not None
+    is_exact_rank_objective = objective_name in {"exact-rank", "exact-rank-sum"}
+    validation_enabled = is_exact_rank_objective and early_stop_patience is not None
     validation_start_idx = (
         max(1, int(split_idx * (1.0 - validation_fraction))) if validation_enabled else split_idx
     )
@@ -366,7 +367,7 @@ def optimise_weights(
             seed,
             json.dumps(model_params, sort_keys=True),
         )
-        if objective_name == "exact-rank":
+        if is_exact_rank_objective:
             objective_ranges = (
                 _rolling_window_ranges(
                     total_draws=len(draws),
@@ -382,6 +383,7 @@ def optimise_weights(
             window_summaries: list[dict[str, float | int | str]] = []
             average_ranks: list[float] = []
             median_ranks: list[float] = []
+            rank_sum = 0.0
             evaluated_draws = 0
             if rolling_windows == 1:
                 rows, summary = rank_historical_winners(
@@ -396,6 +398,7 @@ def optimise_weights(
                     average_ranks.append(float(summary["average_rank"]))
                 if "median_rank" in summary:
                     median_ranks.append(float(summary["median_rank"]))
+                rank_sum += float(summary.get("rank_sum", sum(row.exact_rank for row in rows)))
                 evaluated_draws += len(rows)
                 window_summaries.append(summary)
             else:
@@ -415,19 +418,22 @@ def optimise_weights(
                         average_ranks.append(float(summary["average_rank"]))
                     if "median_rank" in summary:
                         median_ranks.append(float(summary["median_rank"]))
+                    rank_sum += float(summary.get("rank_sum", sum(row.exact_rank for row in rows)))
                     evaluated_draws += len(rows)
                     window_summaries.append(summary)
             average_rank = sum(average_ranks) / len(average_ranks) if average_ranks else float("inf")
             median_rank = sum(median_ranks) / len(median_ranks) if median_ranks else float("inf")
-            value = -average_rank
+            value = -rank_sum if objective_name == "exact-rank-sum" else -average_rank
             trial.set_user_attr("objective_average_rank", average_rank)
             trial.set_user_attr("objective_median_rank", median_rank)
+            trial.set_user_attr("objective_rank_sum", rank_sum)
             trial.set_user_attr("objective_evaluated_draws", evaluated_draws)
             trial.set_user_attr("objective_window_count", len(window_summaries))
             logger.info(
-                "trial %s finished exact_rank_value=%.6f average_rank=%.6f median_rank=%.6f rounds=%s windows=%s",
+                "trial %s finished exact_rank_value=%.6f rank_sum=%.6f average_rank=%.6f median_rank=%.6f rounds=%s windows=%s",
                 trial.number,
                 value,
+                rank_sum,
                 average_rank,
                 median_rank,
                 evaluated_draws,
@@ -569,7 +575,7 @@ def optimise_weights(
     best_seed = int(study.best_params.get("random_seed", 42))
     best_model_params = _model_params_from_study_params(study.best_params)
     top_trial_report: list[dict[str, Any]] = []
-    if objective_name == "exact-rank":
+    if is_exact_rank_objective:
         _holdout_rows, holdout_summary = rank_historical_winners(
             holdout_draws,
             min_training_draws=best_min_training,
@@ -620,6 +626,7 @@ def optimise_weights(
                     "trial": candidate.number,
                     "objective_value": float(candidate.value or 0.0),
                     "objective_average_rank": float(candidate.user_attrs.get("objective_average_rank", -float(candidate.value or 0.0))),
+                    "objective_rank_sum": candidate.user_attrs.get("objective_rank_sum"),
                     "validation_average_rank": (
                         float(validation_summary["average_rank"])
                         if validation_summary is not None and "average_rank" in validation_summary
@@ -726,14 +733,14 @@ def optimise_weights(
             "stopped": early_stop_state["stopped"],
         },
         "rolling_objective": {
-            "enabled": objective_name == "exact-rank" and rolling_windows > 1,
+            "enabled": is_exact_rank_objective and rolling_windows > 1,
             "windows": rolling_windows,
             "rounds_per_window": rolling_window_rounds,
         },
         "top_trial_holdout": {
             "count": top_trial_holdout_count,
             "rounds": top_trial_holdout_rounds,
-            "report_path": "outputs/top_trial_holdout_report.json" if objective_name == "exact-rank" else None,
+            "report_path": "outputs/top_trial_holdout_report.json" if is_exact_rank_objective else None,
             "trials": top_trial_report,
         },
         "portfolio_objective": {

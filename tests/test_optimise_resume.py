@@ -121,6 +121,52 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
     assert trial_rows[0]["state"] == "COMPLETE"
 
 
+def test_exact_rank_sum_objective_minimises_total_rank(monkeypatch, tmp_path: Path) -> None:
+    db = tmp_path / "exact_rank_sum.sqlite"
+    storage = f"sqlite:///{db.as_posix()}"
+    draws = _synthetic_draws()
+
+    def fake_rank_historical_winners(
+        draws,
+        min_training_draws,
+        mode="fast",
+        thresholds=(1, 3, 10, 100, 500, 1000, 3000),
+        model_params=None,
+        max_rounds=None,
+        start_index=None,
+        end_index=None,
+        rank_backend="auto",
+    ):
+        _ = draws, min_training_draws, mode, thresholds, model_params, max_rounds, start_index, end_index, rank_backend
+        summary = {
+            "mode": "fast",
+            "evaluated_draws": 2,
+            "evaluation_stride": 10,
+            "total_ticket_count": 139_838_160,
+            "random_expected_top_1000_rate": 1000 / 139_838_160,
+            "rank_sum": 300.0,
+            "average_rank": 150.0,
+            "median_rank": 150.0,
+        }
+        return [], summary
+
+    monkeypatch.setattr("euromillions.optimise.rank_historical_winners", fake_rank_historical_winners)
+
+    report = optimise_weights(
+        draws,
+        trials=1,
+        objective_name="exact-rank-sum",
+        study_name="exact_rank_sum_test",
+        storage=storage,
+        evaluation_mode="fast",
+        top_trial_holdout_count=0,
+    )
+
+    assert report["objective"] == "exact-rank-sum"
+    assert report["best_value"] == -300.0
+    assert report["holdout"]["rank_sum"] == 300.0
+
+
 def test_exact_rank_early_stopping_uses_validation_not_holdout(
     monkeypatch,
     tmp_path: Path,

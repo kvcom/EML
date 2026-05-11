@@ -434,6 +434,7 @@ def rank_historical_winners(
         "random_expected_top_1000_rate": 1000 / TOTAL_TICKETS,
     }
     if ranks:
+        summary["rank_sum"] = float(sum(ranks))
         summary["median_rank"] = float(median(ranks))
         summary["average_rank"] = float(mean(ranks))
         for threshold in thresholds:

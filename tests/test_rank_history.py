@@ -44,6 +44,7 @@ def test_rank_history_uses_only_previous_draws(monkeypatch) -> None:
     assert [row.draw_id for row in rows] == [4, 5]
     assert all(row.exact_rank == 42 for row in rows)
     assert summary["evaluated_draws"] == 2
+    assert summary["rank_sum"] == 84.0
     assert summary["pct_top_100"] == 1.0
 
 
