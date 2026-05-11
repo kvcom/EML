@@ -83,6 +83,36 @@ outputs/top_trial_holdout_report.json
 That report is sorted by holdout average rank, so the best study trial and the
 best holdout trial can be compared directly.
 
+Before promoting parameters, compare candidates on stricter windows:
+
+```powershell
+python -m euromillions.cli validate-candidates --params-path outputs/best_params.json --params-path outputs/best_holdout_params.json --mode full
+```
+
+Promotion should prefer the validation-window mean. The final holdout is a
+last check, not the objective to keep tuning against.
+
+Portfolio predictions can be backtested by prize tier:
+
+```powershell
+python -m euromillions.cli portfolio-backtest --params-path outputs/best_params.json --top 3 --mode fast --random-baseline-runs 25
+```
+
+This reports model ticket-tier counts next to a same-size random portfolio
+baseline, which is easier to interpret than exact rank alone.
+
+If the practical ticket portfolio is the target, optimise portfolio uplift
+directly:
+
+```powershell
+python -m euromillions.cli optimise --objective portfolio-uplift --top 3 --portfolio-objective-rounds 100 --portfolio-random-baseline-runs 10
+```
+
+This objective maximises `model_winning_round_rate - random_winning_round_rate`,
+where a winning round means at least one generated ticket hit a recognised
+EuroMillions prize tier. It samples prediction-generation parameters too,
+because candidate-pool size and diversity constraints affect portfolio output.
+
 ## Long-run monitoring
 
 Every optimisation writes lightweight monitor files:

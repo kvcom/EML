@@ -15,9 +15,10 @@ from optuna.trial import FrozenTrial
 from euromillions.backtest import run_walk_forward
 from euromillions.features import DrawRecord
 from euromillions.model_params import DEFAULT_MODEL_PARAMS
+from euromillions.portfolio_backtest import run_portfolio_backtest
 from euromillions.rank_history import DEFAULT_THRESHOLDS, RankBackend, rank_historical_winners
 
-OptimisationObjective = Literal["top-k", "exact-rank"]
+OptimisationObjective = Literal["top-k", "exact-rank", "portfolio-uplift"]
 
 
 def _complete_trials_by_value(study: optuna.Study, limit: int) -> list[FrozenTrial]:
@@ -302,6 +303,9 @@ def optimise_weights(
     rolling_window_rounds: int | None = 10,
     top_trial_holdout_count: int = 10,
     top_trial_holdout_rounds: int | None = None,
+    portfolio_objective_rounds: int | None = 100,
+    portfolio_random_baseline_runs: int = 10,
+    portfolio_holdout_random_baseline_runs: int = 25,
     rank_backend: RankBackend = "auto",
     log_path: Path | None = None,
     progress_path: Path | None = None,
@@ -319,6 +323,10 @@ def optimise_weights(
         raise ValueError("rolling_windows must be at least 1")
     if top_trial_holdout_count < 0:
         raise ValueError("top_trial_holdout_count must be at least 0")
+    if portfolio_random_baseline_runs < 1:
+        raise ValueError("portfolio_random_baseline_runs must be at least 1")
+    if portfolio_holdout_random_baseline_runs < 1:
+        raise ValueError("portfolio_holdout_random_baseline_runs must be at least 1")
     Path("outputs").mkdir(parents=True, exist_ok=True)
     _ensure_sqlite_storage_dir(storage)
     logger = _optimise_logger(log_path)
@@ -345,10 +353,10 @@ def optimise_weights(
 
     def objective(trial: optuna.Trial) -> float:
         min_training = trial.suggest_int("min_training_draws", 100, 300)
-        seed = trial.suggest_int("random_seed", 1, 1000) if objective_name == "top-k" else 42
+        seed = trial.suggest_int("random_seed", 1, 1000) if objective_name in {"top-k", "portfolio-uplift"} else 42
         model_params = suggest_model_params(
             trial,
-            include_prediction_params=objective_name == "top-k",
+            include_prediction_params=objective_name in {"top-k", "portfolio-uplift"},
         )
         monitor.trial_started(trial.number, datetime.now(timezone.utc).isoformat(timespec="seconds"))
         logger.info(
@@ -424,6 +432,32 @@ def optimise_weights(
                 median_rank,
                 evaluated_draws,
                 len(window_summaries),
+            )
+            return value
+        if objective_name == "portfolio-uplift":
+            report = run_portfolio_backtest(
+                train_draws,
+                top=top,
+                min_training_draws=min_training,
+                seed=seed,
+                mode=evaluation_mode,
+                max_rounds=portfolio_objective_rounds,
+                model_params=model_params,
+                random_baseline_runs=portfolio_random_baseline_runs,
+            )
+            model_rate = float(report["model"]["winning_round_rate"])
+            random_rate = float(report["random_baseline"]["winning_round_rate"])
+            value = model_rate - random_rate
+            trial.set_user_attr("portfolio_model_winning_round_rate", model_rate)
+            trial.set_user_attr("portfolio_random_winning_round_rate", random_rate)
+            trial.set_user_attr("portfolio_winning_round_uplift", value)
+            logger.info(
+                "trial %s finished portfolio_uplift=%.6f model_winning_round_rate=%.6f random_winning_round_rate=%.6f rounds=%s",
+                trial.number,
+                value,
+                model_rate,
+                random_rate,
+                report["rounds"],
             )
             return value
         result = run_walk_forward(
@@ -606,6 +640,32 @@ def optimise_weights(
             Path("outputs/top_trial_holdout_report.json"),
             {"trials": top_trial_report},
         )
+    elif objective_name == "portfolio-uplift":
+        holdout_report = run_portfolio_backtest(
+            holdout_draws,
+            top=top,
+            min_training_draws=best_min_training,
+            seed=best_seed,
+            mode=evaluation_mode,
+            start_index=split_idx,
+            model_params=best_model_params,
+            random_baseline_runs=portfolio_holdout_random_baseline_runs,
+        )
+        logger.info(
+            "holdout finished portfolio rounds=%s model_winning_round_rate=%.6f random_winning_round_rate=%.6f uplift=%.6f",
+            holdout_report["rounds"],
+            holdout_report["model"]["winning_round_rate"],
+            holdout_report["random_baseline"]["winning_round_rate"],
+            holdout_report["model"]["winning_round_rate"] - holdout_report["random_baseline"]["winning_round_rate"],
+        )
+        holdout_payload = {
+            **holdout_report,
+            "sampled": int(holdout_report["evaluation_stride"]) > 1,
+            "winning_round_uplift": (
+                float(holdout_report["model"]["winning_round_rate"])
+                - float(holdout_report["random_baseline"]["winning_round_rate"])
+            ),
+        }
     else:
         holdout_result = run_walk_forward(
             holdout_draws,
@@ -675,6 +735,12 @@ def optimise_weights(
             "rounds": top_trial_holdout_rounds,
             "report_path": "outputs/top_trial_holdout_report.json" if objective_name == "exact-rank" else None,
             "trials": top_trial_report,
+        },
+        "portfolio_objective": {
+            "enabled": objective_name == "portfolio-uplift",
+            "objective_rounds": portfolio_objective_rounds,
+            "random_baseline_runs": portfolio_random_baseline_runs,
+            "holdout_random_baseline_runs": portfolio_holdout_random_baseline_runs,
         },
         "holdout": holdout_payload,
     }

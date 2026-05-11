@@ -8,16 +8,29 @@ from pathlib import Path
 from typing import Any, Literal
 
 import typer
+import optuna
 from sqlalchemy import func, select
 
 from euromillions.backtest import run_walk_forward
+from euromillions.candidate_validation import (
+    CandidateSpec,
+    load_params_file,
+    save_candidate_validation_report,
+    validate_candidates,
+)
 from euromillions.combinations import build_main_combinations, build_star_combinations
 from euromillions.config import load_config
 from euromillions.db import begin, create_all_tables, create_db_engine
 from euromillions.ingest_excel import ingest_draw_rows, read_excel_draws
 from euromillions.ingest_web import reconcile_and_insert
 from euromillions.io import load_draw_records
-from euromillions.optimise import OptimisationObjective, optimise_weights, recommended_trials
+from euromillions.optimise import (
+    OptimisationObjective,
+    _model_params_from_study_params,
+    optimise_weights,
+    recommended_trials,
+)
+from euromillions.portfolio_backtest import run_portfolio_backtest, save_portfolio_backtest_report
 from euromillions.predict import generate_predictions, save_predictions
 from euromillions.rank_history import RankBackend, parse_thresholds, rank_historical_winners, save_rank_history
 from euromillions.schema import draws
@@ -66,6 +79,42 @@ def _load_model_params(path: str) -> dict[str, float] | None:
     if not isinstance(raw, dict):
         raise ValueError(f"{path} must contain a JSON object")
     return {str(k): float(v) for k, v in raw.items() if isinstance(v, int | float)}
+
+
+def _load_candidate_specs(
+    params_paths: list[str],
+    trial_numbers: list[int],
+    study_name: str,
+    storage: str,
+) -> list[CandidateSpec]:
+    specs = [load_params_file(path) for path in params_paths]
+    if trial_numbers:
+        study = optuna.load_study(study_name=study_name, storage=storage)
+        wanted = set(trial_numbers)
+        trials = {trial.number: trial for trial in study.trials if trial.number in wanted}
+        missing = sorted(wanted - set(trials))
+        if missing:
+            raise typer.BadParameter(f"trial(s) not found in study: {missing}")
+        for number in trial_numbers:
+            trial = trials[number]
+            specs.append(
+                CandidateSpec(
+                    label=f"trial_{number}",
+                    params={
+                        "min_training_draws": float(trial.params.get("min_training_draws", 200)),
+                        **_model_params_from_study_params(trial.params),
+                    },
+                    objective_value=float(trial.value) if trial.value is not None else None,
+                    objective_average_rank=(
+                        float(trial.user_attrs["objective_average_rank"])
+                        if "objective_average_rank" in trial.user_attrs
+                        else (-float(trial.value) if trial.value is not None else None)
+                    ),
+                )
+            )
+    if not specs:
+        raise typer.BadParameter("provide at least one --params-path or --trial")
+    return specs
 
 
 def _engine() -> Any:
@@ -151,6 +200,9 @@ def optimise(
     rolling_window_rounds: int | None = typer.Option(10, "--rolling-window-rounds"),
     top_trial_holdout_count: int = typer.Option(10, "--top-trial-holdout-count"),
     top_trial_holdout_rounds: int | None = typer.Option(None, "--top-trial-holdout-rounds"),
+    portfolio_objective_rounds: int | None = typer.Option(100, "--portfolio-objective-rounds"),
+    portfolio_random_baseline_runs: int = typer.Option(10, "--portfolio-random-baseline-runs"),
+    portfolio_holdout_random_baseline_runs: int = typer.Option(25, "--portfolio-holdout-random-baseline-runs"),
     rank_backend: RankBackend = typer.Option("auto", "--rank-backend"),
 ) -> None:
     started_at = _utc_now()
@@ -186,6 +238,9 @@ def optimise(
         rolling_window_rounds=rolling_window_rounds,
         top_trial_holdout_count=top_trial_holdout_count,
         top_trial_holdout_rounds=top_trial_holdout_rounds,
+        portfolio_objective_rounds=portfolio_objective_rounds,
+        portfolio_random_baseline_runs=portfolio_random_baseline_runs,
+        portfolio_holdout_random_baseline_runs=portfolio_holdout_random_baseline_runs,
         rank_backend=rank_backend,
         log_path=log_path,
         metadata=metadata,
@@ -208,6 +263,7 @@ def optimise(
     typer.echo("early_stop=" + json.dumps(report["early_stop"]))
     typer.echo("rolling_objective=" + json.dumps(report["rolling_objective"]))
     typer.echo("top_trial_holdout=" + json.dumps(report["top_trial_holdout"]))
+    typer.echo("portfolio_objective=" + json.dumps(report["portfolio_objective"]))
     typer.echo("metadata=" + json.dumps(report["metadata"]))
     if objective == "exact-rank":
         typer.echo(
@@ -217,6 +273,20 @@ def optimise(
                     "average_rank": report["holdout"].get("average_rank"),
                     "median_rank": report["holdout"].get("median_rank"),
                     "evaluated_draws": report["holdout"]["evaluated_draws"],
+                    "sampled": report["holdout"]["sampled"],
+                    "evaluation_stride": report["holdout"]["evaluation_stride"],
+                }
+            )
+        )
+    elif objective == "portfolio-uplift":
+        typer.echo(
+            "holdout_metrics="
+            + json.dumps(
+                {
+                    "model_winning_round_rate": report["holdout"]["model"]["winning_round_rate"],
+                    "random_winning_round_rate": report["holdout"]["random_baseline"]["winning_round_rate"],
+                    "winning_round_uplift": report["holdout"]["winning_round_uplift"],
+                    "rounds": report["holdout"]["rounds"],
                     "sampled": report["holdout"]["sampled"],
                     "evaluation_stride": report["holdout"]["evaluation_stride"],
                 }
@@ -317,6 +387,100 @@ def predict(
             f"Score: {row['score']:.5f}\n"
             f"Why: {row['why']}\n"
         )
+
+
+@app.command("validate-candidates")
+def validate_candidates_cmd(
+    params_path: list[str] | None = typer.Option(None, "--params-path"),
+    trial: list[int] | None = typer.Option(None, "--trial"),
+    study_name: str = typer.Option("monitor_rolling_windows_20260510", "--study-name"),
+    storage: str = typer.Option("sqlite:///outputs/monitor_rolling_windows_20260510.sqlite", "--storage"),
+    mode: Literal["fast", "full"] = typer.Option("full", "--mode"),
+    window_count: int = typer.Option(5, "--window-count"),
+    window_size: int = typer.Option(20, "--window-size"),
+    gap: int = typer.Option(20, "--gap"),
+    rank_backend: RankBackend = typer.Option("auto", "--rank-backend"),
+    out_path: str = typer.Option("outputs/candidate_validation_report.json", "--out-path"),
+) -> None:
+    engine = _engine()
+    with begin(engine) as conn:
+        records = load_draw_records(conn)
+    specs = _load_candidate_specs(
+        params_paths=params_path or [],
+        trial_numbers=trial or [],
+        study_name=study_name,
+        storage=storage,
+    )
+    report = validate_candidates(
+        records,
+        specs,
+        holdout_fraction=load_config().optimisation.holdout_fraction,
+        mode=mode,
+        rank_backend=rank_backend,
+        window_count=window_count,
+        window_size=window_size,
+        gap=gap,
+    )
+    save_candidate_validation_report(report, out_path)
+    typer.echo("wrote " + out_path)
+    typer.echo("ranked_by_validation_mean=" + json.dumps(report["ranked_by_validation_mean"]))
+    typer.echo("ranked_by_holdout=" + json.dumps(report["ranked_by_holdout"]))
+
+
+@app.command("portfolio-backtest")
+def portfolio_backtest(
+    top: int = typer.Option(3, "--top"),
+    params_path: str = typer.Option("outputs/best_params.json", "--params-path"),
+    min_training_draws: int | None = typer.Option(None, "--min-training-draws"),
+    mode: Literal["fast", "full"] = typer.Option("fast", "--mode"),
+    max_rounds: int | None = typer.Option(None, "--max-rounds"),
+    start_index: int | None = typer.Option(None, "--start-index"),
+    end_index: int | None = typer.Option(None, "--end-index"),
+    max_main_overlap: int | None = typer.Option(None, "--max-main-overlap"),
+    require_distinct_star_pairs: bool | None = typer.Option(None, "--require-distinct-star-pairs"),
+    random_baseline_runs: int = typer.Option(25, "--random-baseline-runs"),
+    seed: int = typer.Option(42, "--seed"),
+    out_path: str = typer.Option("outputs/portfolio_backtest_report.json", "--out-path"),
+) -> None:
+    engine = _engine()
+    with begin(engine) as conn:
+        records = load_draw_records(conn)
+    model_params = _load_model_params(params_path)
+    effective_min_training = (
+        min_training_draws
+        if min_training_draws is not None
+        else int((model_params or {}).get("min_training_draws", load_config().min_training_draws))
+    )
+    report = run_portfolio_backtest(
+        records,
+        top=top,
+        min_training_draws=effective_min_training,
+        seed=seed,
+        mode=mode,
+        max_rounds=max_rounds,
+        start_index=start_index,
+        end_index=end_index,
+        model_params=model_params,
+        max_main_overlap=max_main_overlap,
+        require_distinct_star_pairs=require_distinct_star_pairs,
+        random_baseline_runs=random_baseline_runs,
+    )
+    report["params_path"] = params_path
+    report["min_training_draws"] = effective_min_training
+    save_portfolio_backtest_report(report, out_path)
+    typer.echo("wrote " + out_path)
+    typer.echo(
+        "portfolio_summary="
+        + json.dumps(
+            {
+                "rounds": report["rounds"],
+                "model_winning_round_rate": report["model"]["winning_round_rate"],
+                "random_winning_round_rate": report["random_baseline"]["winning_round_rate"],
+                "model_tier_counts": report["model"]["tier_counts"],
+                "random_tier_counts": report["random_baseline"]["tier_counts"],
+            }
+        )
+    )
 
 
 @app.command("rank-history")

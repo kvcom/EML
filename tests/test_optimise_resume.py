@@ -24,7 +24,7 @@ def test_optuna_resume_with_sqlite_storage(tmp_path: Path) -> None:
     log_path = tmp_path / "optimise.log"
     storage = f"sqlite:///{db.as_posix()}"
     study_name = "resume_test"
-    draws = _synthetic_draws()
+    draws = _synthetic_draws(700)
 
     report1 = optimise_weights(
         draws,
@@ -63,7 +63,7 @@ def test_exact_rank_objective_uses_rank_history(monkeypatch, tmp_path: Path) -> 
     db = tmp_path / "exact_rank_optuna.sqlite"
     log_path = tmp_path / "exact_rank.log"
     storage = f"sqlite:///{db.as_posix()}"
-    draws = _synthetic_draws()
+    draws = _synthetic_draws(700)
     seen_start_indexes: list[int | None] = []
 
     def fake_rank_historical_winners(
@@ -246,7 +246,7 @@ def test_exact_rank_rolling_objective_uses_multiple_windows(
 ) -> None:
     db = tmp_path / "rolling.sqlite"
     storage = f"sqlite:///{db.as_posix()}"
-    draws = _synthetic_draws()
+    draws = _synthetic_draws(700)
     objective_ranges: list[tuple[int | None, int | None, int | None]] = []
 
     def fake_rank_historical_winners(
@@ -293,3 +293,77 @@ def test_exact_rank_rolling_objective_uses_multiple_windows(
     assert report["rolling_objective"]["windows"] == 3
     assert len(objective_ranges) == 3
     assert {max_rounds for _, _, max_rounds in objective_ranges} == {1}
+
+
+def test_portfolio_uplift_objective_uses_portfolio_backtest(monkeypatch, tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.sqlite"
+    storage = f"sqlite:///{db.as_posix()}"
+    draws = _synthetic_draws()
+    calls: list[dict[str, object]] = []
+
+    def fake_run_portfolio_backtest(
+        draws,
+        top=3,
+        min_training_draws=200,
+        seed=42,
+        mode="fast",
+        evaluation_stride=None,
+        max_rounds=None,
+        start_index=None,
+        end_index=None,
+        model_params=None,
+        max_main_overlap=None,
+        require_distinct_star_pairs=None,
+        random_baseline_runs=1,
+    ):
+        calls.append(
+            {
+                "top": top,
+                "max_rounds": max_rounds,
+                "start_index": start_index,
+                "random_baseline_runs": random_baseline_runs,
+                "has_prediction_params": "candidate_pool_multiplier" in (model_params or {}),
+            }
+        )
+        model_rate = 0.4 if start_index is None else 0.3
+        random_rate = 0.25
+        return {
+            "top": top,
+            "mode": mode,
+            "rounds": 5,
+            "evaluated_draws": 50,
+            "evaluation_stride": 10,
+            "random_baseline_runs": random_baseline_runs,
+            "model": {
+                "winning_round_rate": model_rate,
+                "tier_counts": {},
+            },
+            "random_baseline": {
+                "winning_round_rate": random_rate,
+                "tier_counts": {},
+            },
+        }
+
+    monkeypatch.setattr("euromillions.optimise.run_portfolio_backtest", fake_run_portfolio_backtest)
+
+    report = optimise_weights(
+        draws,
+        trials=1,
+        objective_name="portfolio-uplift",
+        study_name="portfolio_test",
+        storage=storage,
+        evaluation_mode="fast",
+        portfolio_objective_rounds=7,
+        portfolio_random_baseline_runs=3,
+        portfolio_holdout_random_baseline_runs=5,
+    )
+
+    assert report["objective"] == "portfolio-uplift"
+    assert report["best_value"] == 0.15000000000000002
+    assert report["portfolio_objective"]["enabled"] is True
+    assert report["holdout"]["winning_round_uplift"] == 0.04999999999999999
+    assert calls[0]["max_rounds"] == 7
+    assert calls[0]["random_baseline_runs"] == 3
+    assert calls[0]["has_prediction_params"] is True
+    assert calls[-1]["start_index"] is not None
+    assert calls[-1]["random_baseline_runs"] == 5
