@@ -125,6 +125,21 @@ where a winning round means at least one generated ticket hit a recognised
 EuroMillions prize tier. It samples prediction-generation parameters too,
 because candidate-pool size and diversity constraints affect portfolio output.
 
+## Dynamic parameter experiment
+
+The optional dynamic-parameter experiment tests whether per-draw oracle
+parameters have forecastable movement:
+
+```powershell
+python -m euromillions.cli dynamic-params --params-path outputs/best_params.json --max-targets 20 --oracle-trials 20 --forecast-lookback 5
+```
+
+For each historical target draw, it first evaluates a forecasted parameter set
+built only from earlier oracle parameters, then optimises oracle parameters for
+the current draw and appends them to the sequence. This keeps the experiment
+leakage-safe. Treat it as research unless it beats the fixed production params
+on unseen rolling windows.
+
 ## Long-run monitoring
 
 Every optimisation writes lightweight monitor files:

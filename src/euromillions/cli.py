@@ -21,6 +21,7 @@ from euromillions.candidate_validation import (
 from euromillions.combinations import build_main_combinations, build_star_combinations
 from euromillions.config import load_config
 from euromillions.db import begin, create_all_tables, create_db_engine
+from euromillions.dynamic_params import run_dynamic_params_experiment, save_dynamic_params_report
 from euromillions.ingest_excel import ingest_draw_rows, read_excel_draws
 from euromillions.ingest_web import reconcile_and_insert
 from euromillions.io import load_draw_records
@@ -482,6 +483,42 @@ def portfolio_backtest(
             }
         )
     )
+
+
+@app.command("dynamic-params")
+def dynamic_params(
+    params_path: str = typer.Option("outputs/best_params.json", "--params-path"),
+    start_index: int | None = typer.Option(None, "--start-index"),
+    end_index: int | None = typer.Option(None, "--end-index"),
+    max_targets: int = typer.Option(20, "--max-targets"),
+    stride: int = typer.Option(10, "--stride"),
+    oracle_trials: int = typer.Option(20, "--oracle-trials"),
+    forecast_lookback: int = typer.Option(5, "--forecast-lookback"),
+    mode: Literal["fast", "full"] = typer.Option("fast", "--mode"),
+    rank_backend: RankBackend = typer.Option("auto", "--rank-backend"),
+    out_path: str = typer.Option("outputs/dynamic_params_report.json", "--out-path"),
+) -> None:
+    engine = _engine()
+    with begin(engine) as conn:
+        records = load_draw_records(conn)
+    baseline_params = _load_model_params(params_path)
+    if baseline_params is None:
+        raise typer.BadParameter(f"params file not found: {params_path}")
+    report = run_dynamic_params_experiment(
+        records,
+        baseline_params=baseline_params,
+        start_index=start_index,
+        end_index=end_index,
+        max_targets=max_targets,
+        stride=stride,
+        oracle_trials=oracle_trials,
+        forecast_lookback=forecast_lookback,
+        mode=mode,
+        rank_backend=rank_backend,
+    )
+    save_dynamic_params_report(report, out_path)
+    typer.echo("wrote " + out_path)
+    typer.echo("dynamic_summary=" + json.dumps(report["summary"]))
 
 
 @app.command("rank-history")

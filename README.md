@@ -22,6 +22,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `python -m euromillions.cli optimise --objective exact-rank --rank-backend auto`
 - `python -m euromillions.cli validate-candidates --params-path outputs/best_params.json --params-path outputs/best_holdout_params.json --mode full`
 - `python -m euromillions.cli portfolio-backtest --params-path outputs/best_params.json --top 3 --mode fast --random-baseline-runs 25`
+- `python -m euromillions.cli dynamic-params --params-path outputs/best_params.json --max-targets 20 --oracle-trials 20 --forecast-lookback 5`
 - `python -m euromillions.cli predict --top 3`
 - `python -m euromillions.cli rank-history --mode fast --thresholds 1,3,10,100,500,1000,3000`
 - `python -m euromillions.cli run`
@@ -35,6 +36,7 @@ It ranks statistically preferred combinations from historical patterns and bench
 - `optimise`: resumes or creates a persistent Optuna study, logs progress to `logs/`, records run metadata, and reports holdout performance. The default objective is exact full-ticket historical rank; use `--objective exact-rank-sum` to minimise the total rank sum directly, `--objective portfolio-uplift --top 3` to optimise practical prize-tier portfolio winning-rate uplift, or `--objective top-k --top 3` for the older Top-K hit objective. Exact-rank runs can stop automatically with validation early stopping via `--early-stop-patience`.
 - `validate-candidates`: compares parameter files or Optuna trial IDs across multiple validation windows and the final holdout, then writes a promotion report.
 - `portfolio-backtest`: evaluates a generated ticket portfolio against historical prize-tier outcomes and a random portfolio baseline.
+- `dynamic-params`: optional research experiment that fits per-draw oracle parameters after each target draw, forecasts future parameters from prior oracle dynamics only, and compares against fixed production params.
 - `predict`: updates data, refreshes features incrementally, and outputs top-N ranked predictions to terminal/JSON/CSV.
 - `rank-history`: ranks historical winning tickets using only prior draws and writes exact rank bucket reports to JSON/CSV.
 - `run`: convenience pipeline for update + feature refresh + prediction.
